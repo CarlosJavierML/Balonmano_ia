@@ -129,6 +129,7 @@ async def live_snapshot(match_id: int, session: AsyncSession = Depends(get_sessi
                 player_id=None,
                 label=f"Jugador #{s.track_id}",
                 team=analysis.team_by_track.get(s.track_id),
+                role=analysis.role_by_track.get(s.track_id),
                 distance_m=s.distance_m,
                 avg_speed_kmh=s.avg_speed_kmh,
                 max_speed_kmh=s.max_speed_kmh,

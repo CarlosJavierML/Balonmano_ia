@@ -12,8 +12,12 @@ import asyncio
 import contextlib
 import logging
 
-from app.analysis.session import analyze_session
-from app.config import HEATMAPS_DIR
+from pathlib import Path
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.analysis.session import SessionAnalysis, analyze_session
+from app.config import HEATMAPS_DIR, TRACKING_DIR
 from app.court import CourtCalibration, CourtType, get_court_config
 from app.db import async_session_maker
 from app.models import Event, Match, PlayerMatchStat
@@ -39,14 +43,57 @@ async def _stop_task(task: asyncio.Task) -> None:
         await task
 
 
+def _event_rows(match_id: int, analysis: SessionAnalysis) -> list[Event]:
+    return [
+        Event(
+            match_id=match_id,
+            event_type=ev.event_type,
+            timestamp_s=ev.t,
+            track_id_from=ev.track_id_from,
+            track_id_to=ev.track_id_to,
+            x=ev.x,
+            y=ev.y,
+            meta=ev.meta,
+        )
+        for ev in analysis.events
+    ]
+
+
+class TrackingUnavailableError(Exception):
+    """The session has no saved trajectories (analyzed by an older version)."""
+
+
+async def reanalyze_match(session: AsyncSession, match: Match) -> None:
+    """Recomputes teams, roles, events and team summary from the saved
+    trajectories, applying the match's manual overrides. Physical stats
+    don't depend on teams, so stat rows are updated in place (keeping any
+    custom player names). ``match`` must have player_stats and events loaded."""
+    if not match.tracking_path or not Path(match.tracking_path).exists():
+        raise TrackingUnavailableError
+    result = await asyncio.to_thread(TrackingResult.load, Path(match.tracking_path))
+    court = get_court_config(CourtType(match.court_type))
+    analysis = analyze_session(result, court, match.overrides)
+
+    for stat in match.player_stats:
+        stat.team = analysis.team_by_track.get(stat.track_id)
+        stat.role = analysis.role_by_track.get(stat.track_id)
+    match.events.clear()
+    match.events.extend(_event_rows(match.id, analysis))
+    match.team_summary = analysis.team_summary or None
+
+
 async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
     async with async_session_maker() as session:
         match = await session.get(Match, match_id)
         if match is None:
             return
 
+        tracking_path = TRACKING_DIR / f"match_{match_id}.json.gz"
+        await asyncio.to_thread(result.save, tracking_path)
+        match.tracking_path = str(tracking_path)
+
         court = get_court_config(CourtType(match.court_type))
-        analysis = analyze_session(result, court)
+        analysis = analyze_session(result, court, match.overrides)
 
         for track_id, stats in analysis.player_stats.items():
             heatmap_path = None
@@ -61,6 +108,7 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
                     track_id=track_id,
                     label=f"Jugador #{track_id}",
                     team=analysis.team_by_track.get(track_id),
+                    role=analysis.role_by_track.get(track_id),
                     distance_m=stats.distance_m,
                     avg_speed_kmh=stats.avg_speed_kmh,
                     max_speed_kmh=stats.max_speed_kmh,
@@ -70,19 +118,7 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
                 )
             )
 
-        for ev in analysis.events:
-            session.add(
-                Event(
-                    match_id=match_id,
-                    event_type=ev.event_type,
-                    timestamp_s=ev.t,
-                    track_id_from=ev.track_id_from,
-                    track_id_to=ev.track_id_to,
-                    x=ev.x,
-                    y=ev.y,
-                    meta=ev.meta,
-                )
-            )
+        session.add_all(_event_rows(match_id, analysis))
 
         match.duration_s = result.duration_s
         match.team_summary = analysis.team_summary or None

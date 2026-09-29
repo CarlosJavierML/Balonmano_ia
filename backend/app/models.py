@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
@@ -47,6 +48,12 @@ class Match(Base):
     # Per-team aggregates (possession, passes, turnovers, shots, goals,
     # jersey color) -- see app.analysis.tactical.build_team_summary.
     team_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # User-chosen display names, e.g. {"A": "Cadete A", "B": "Visitante"}.
+    team_names: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Manual team/role corrections per track id (see app.analysis.session.Overrides).
+    overrides: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Saved raw trajectories, used to re-analyze after manual corrections.
+    tracking_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -54,6 +61,11 @@ class Match(Base):
         back_populates="match", cascade="all, delete-orphan"
     )
     events: Mapped[list["Event"]] = relationship(back_populates="match", cascade="all, delete-orphan")
+
+    @property
+    def editable(self) -> bool:
+        """Manual team/role corrections need the saved trajectories."""
+        return self.status == "done" and bool(self.tracking_path) and Path(self.tracking_path).exists()
 
 
 class PlayerMatchStat(Base):
@@ -67,6 +79,7 @@ class PlayerMatchStat(Base):
     player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"), nullable=True)
     label: Mapped[str] = mapped_column(String(120), default="")
     team: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "A" | "B" | None
+    role: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "jugador" | "portero" | "arbitro"
 
     distance_m: Mapped[float] = mapped_column(Float, default=0.0)
     avg_speed_kmh: Mapped[float] = mapped_column(Float, default=0.0)

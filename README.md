@@ -45,7 +45,10 @@ equipos, etc.).
    calor por jugador.
 5. **Equipos**: el color de la camiseta de cada jugador (tercio superior
    del recorte, en espacio de color Lab) se agrupa en dos equipos con
-   k-means; árbitros y personas con colores muy distintos quedan sin equipo.
+   k-means; los porteros se reconocen por pasar casi todo el tiempo en su
+   área y los árbitros quedan sin equipo (y no cuentan para la posesión).
+   Desde el dashboard puedes renombrar equipos y jugadores y corregir el
+   equipo o rol de cualquiera: las estadísticas se recalculan al momento.
 6. **Eventos tácticos**: reglas sobre la posición/velocidad del balón
    respecto a los jugadores y las porterías detectan pases (entre
    compañeros), pérdidas de balón (al rival), tiros y goles, además del
@@ -101,10 +104,11 @@ Abre http://localhost:5173.
 2. Elige la modalidad (pista o playa).
 3. Elige **Subir vídeo** (arrastra el archivo grabado con tu cámara fija) o
    **En directo** (introduce la URL RTSP de tu cámara).
-4. (Recomendado) Activa la **calibración**, pulsa **Marcar sobre la imagen**
-   y haz clic en las 4 esquinas de la pista sobre un fotograma de tu vídeo
-   (o una captura de la cámara en directo). También se pueden escribir las
-   coordenadas a mano. Mejora mucho la precisión de distancias y velocidades.
+4. (Recomendado) Activa la **calibración** y pulsa **Marcar sobre la imagen**:
+   la app detecta las 4 esquinas de la pista en un fotograma de tu vídeo (o
+   una captura de la cámara en directo); revísalas y arrastra las que no
+   encajen, o haz clic en ellas a mano. Arriba/abajo son las bandas y
+   izquierda/derecha las líneas de gol. Mejora mucho la precisión de distancias y velocidades.
 5. Espera a que el análisis termine (con barra de progreso) (o, en directo, observa las
    estadísticas en tiempo real y pulsa **Detener transmisión** cuando
    acabes).
@@ -122,8 +126,8 @@ arquitectura:
 - Los eventos tácticos (pase, tiro, gol) se detectan con reglas basadas en
   posición/velocidad, no con un modelo entrenado en acciones de balonmano.
 - La asignación de equipos por color de camiseta asume dos equipaciones
-  bien diferenciadas; con colores parecidos (o porteros con otra
-  equipación) algunos jugadores pueden quedar sin equipo.
+  bien diferenciadas; con colores parecidos algunos jugadores pueden quedar
+  sin equipo (se pueden corregir a mano desde el dashboard).
 
 Todo esto está detallado, con plan concreto de mejora, en
 [`docs/ROADMAP.md`](docs/ROADMAP.md).

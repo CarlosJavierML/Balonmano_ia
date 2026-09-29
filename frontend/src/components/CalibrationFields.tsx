@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchStreamPreview } from "../api/client";
+import { fetchStreamPreview, suggestCorners } from "../api/client";
 import type { PixelCorner } from "../types";
 
+// Top/bottom edges are the sidelines (long sides), left/right the goal lines,
+// matching the homography in backend/app/court.py (top edge = 40 m / 27 m).
 const CORNER_LABELS = [
   "Esquina superior izquierda",
   "Esquina superior derecha",
@@ -62,7 +64,13 @@ export default function CalibrationFields({
   const [frameSize, setFrameSize] = useState<{ w: number; h: number } | null>(null);
   const [loadingFrame, setLoadingFrame] = useState(false);
   const [frameError, setFrameError] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [detectMessage, setDetectMessage] = useState<string | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  // A drag ends with a click event on the canvas; ignore that one.
+  const justDragged = useRef(false);
 
   function emit(next: Corners, isEnabled: boolean) {
     const complete = next.every((c): c is PixelCorner => c !== null);
@@ -106,6 +114,7 @@ export default function CalibrationFields({
       else throw new Error("Selecciona primero un vídeo o indica la URL del stream");
       setFrameUrl(url);
       setAndEmit(EMPTY);
+      await detectCorners(url);
     } catch (e) {
       setFrameError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -113,15 +122,66 @@ export default function CalibrationFields({
     }
   }
 
-  function handleImageClick(e: React.MouseEvent<HTMLDivElement>) {
+  /** Asks the backend to find the court lines and pre-place the 4 corners. */
+  async function detectCorners(url: string | null = frameUrl) {
+    if (!url) return;
+    setDetecting(true);
+    setDetectMessage(null);
+    try {
+      const blob = await (await fetch(url)).blob();
+      setAndEmit(await suggestCorners(blob));
+      setDetectMessage("Esquinas detectadas automáticamente: revísalas y arrastra las que no encajen.");
+    } catch (e) {
+      setDetectMessage(
+        `${e instanceof Error ? e.message : String(e)}`.replace(/\.$/, "") +
+          ". Haz clic en las esquinas manualmente.",
+      );
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  function toImageCoords(clientX: number, clientY: number): PixelCorner | null {
     const img = imgRef.current;
-    if (!img || !frameSize) return;
-    const index = corners.findIndex((c) => c === null);
-    if (index === -1) return;
+    if (!img || !frameSize) return null;
     const rect = img.getBoundingClientRect();
-    const x = Math.round(((e.clientX - rect.left) / rect.width) * frameSize.w);
-    const y = Math.round(((e.clientY - rect.top) / rect.height) * frameSize.h);
-    setAndEmit(corners.map((c, i) => (i === index ? { x, y } : c)));
+    const x = ((clientX - rect.left) / rect.width) * frameSize.w;
+    const y = ((clientY - rect.top) / rect.height) * frameSize.h;
+    return {
+      x: Math.round(Math.min(frameSize.w, Math.max(0, x))),
+      y: Math.round(Math.min(frameSize.h, Math.max(0, y))),
+    };
+  }
+
+  function handleImageClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (justDragged.current) {
+      justDragged.current = false;
+      return;
+    }
+    const index = corners.findIndex((c) => c === null);
+    const point = toImageCoords(e.clientX, e.clientY);
+    if (index === -1 || !point) return;
+    setAndEmit(corners.map((c, i) => (i === index ? point : c)));
+  }
+
+  function startDrag(index: number, e: React.PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    canvasRef.current?.setPointerCapture(e.pointerId);
+    setDragIndex(index);
+  }
+
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (dragIndex === null) return;
+    const point = toImageCoords(e.clientX, e.clientY);
+    if (point) setAndEmit(corners.map((c, i) => (i === dragIndex ? point : c)));
+  }
+
+  function endDrag(e: React.PointerEvent<HTMLDivElement>) {
+    if (dragIndex === null) return;
+    canvasRef.current?.releasePointerCapture(e.pointerId);
+    setDragIndex(null);
+    justDragged.current = true;
   }
 
   function undo() {
@@ -170,7 +230,10 @@ export default function CalibrationFields({
               {loadingFrame ? "Cargando imagen…" : frameUrl ? "Recargar imagen" : "Marcar sobre la imagen"}
             </button>
             {frameUrl && (
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" className="btn" onClick={() => detectCorners()} disabled={detecting}>
+                  {detecting ? "Detectando…" : "Detectar esquinas"}
+                </button>
                 <button type="button" className="btn" onClick={undo} disabled={placed.length === 0}>
                   Deshacer
                 </button>
@@ -190,13 +253,21 @@ export default function CalibrationFields({
 
           {frameUrl && (
             <>
+              {detectMessage && <p className="helper-text">{detectMessage}</p>}
               <p className="helper-text">
                 {nextIndex === -1
-                  ? "¡Listo! Las 4 esquinas están marcadas."
+                  ? "Las 4 esquinas están marcadas. Puedes arrastrarlas para ajustarlas."
                   : `Haz clic en: ${CORNER_LABELS[nextIndex].toLowerCase()} (${nextIndex + 1}/4). ` +
-                    "Arriba = una línea de gol, abajo = la otra."}
+                    "Los bordes de arriba y abajo son las bandas (lados largos); izquierda y derecha, las líneas de gol."}
               </p>
-              <div className="calibration-canvas" onClick={handleImageClick}>
+              <div
+                ref={canvasRef}
+                className={`calibration-canvas${dragIndex !== null ? " dragging" : ""}`}
+                onClick={handleImageClick}
+                onPointerMove={handlePointerMove}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+              >
                 <img
                   ref={imgRef}
                   src={frameUrl}
@@ -221,6 +292,15 @@ export default function CalibrationFields({
                         c && (
                           <g key={i}>
                             <circle cx={c.x} cy={c.y} r={markerRadius} fill="#2fbf71" stroke="#05170d" />
+                            {/* Invisible, larger hit area so corners are easy to grab. */}
+                            <circle
+                              className="corner-handle"
+                              cx={c.x}
+                              cy={c.y}
+                              r={markerRadius * 2.5}
+                              fill="transparent"
+                              onPointerDown={(e) => startDrag(i, e)}
+                            />
                             <text
                               x={c.x + markerRadius * 1.4}
                               y={c.y - markerRadius * 1.4}

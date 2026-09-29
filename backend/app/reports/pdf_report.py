@@ -78,9 +78,16 @@ TABLE_STYLE = TableStyle(
 SIDE_LABELS = {"left": "izquierda", "right": "derecha"}
 
 
-def _team_summary_table(team_summary: dict) -> Table:
+ROLE_LABELS = {"jugador": "Jugador", "portero": "Portero", "arbitro": "Árbitro / otro"}
+
+
+def team_display_name(team: str, team_names: dict | None) -> str:
+    return (team_names or {}).get(team) or f"Equipo {team}"
+
+
+def _team_summary_table(team_summary: dict, team_names: dict | None) -> Table:
     teams = sorted(team_summary)
-    rows = [["", *[f"Equipo {t}" for t in teams]]]
+    rows = [["", *[team_display_name(t, team_names) for t in teams]]]
     for label, key, fmt in (
         ("Jugadores", "players", "{}"),
         ("Posesión", "possession_pct", "{} %"),
@@ -125,7 +132,7 @@ def build_match_report(
 
     if match.team_summary:
         story.append(Paragraph("Resumen por equipos", styles["Heading2"]))
-        story.append(_team_summary_table(match.team_summary))
+        story.append(_team_summary_table(match.team_summary, match.team_names))
         story.append(
             Paragraph(
                 "Equipos asignados automáticamente por el color de la camiseta.",
@@ -141,12 +148,15 @@ def build_match_report(
         story.append(Spacer(1, 0.5 * cm))
 
         story.append(Paragraph("Estadísticas físicas por jugador", styles["Heading2"]))
-        table_data = [["Jugador", "Equipo", "Distancia (m)", "Vel. media (km/h)", "Vel. máx (km/h)", "Sprints"]]
+        table_data = [
+            ["Jugador", "Equipo", "Rol", "Distancia (m)", "Vel. media (km/h)", "Vel. máx (km/h)", "Sprints"]
+        ]
         for s in player_stats:
             table_data.append(
                 [
                     s.label or f"#{s.track_id}",
-                    s.team or "—",
+                    team_display_name(s.team, match.team_names) if s.team else "—",
+                    ROLE_LABELS.get(s.role or "", "—"),
                     f"{s.distance_m:.0f}",
                     f"{s.avg_speed_kmh:.1f}",
                     f"{s.max_speed_kmh:.1f}",
@@ -169,17 +179,18 @@ def build_match_report(
     story.append(PageBreak())
     story.append(Paragraph("Eventos tácticos detectados", styles["Heading2"]))
     if events:
+        labels = {s.track_id: s.label or f"#{s.track_id}" for s in player_stats}
         event_table_data = [["Minuto", "Evento", "Detalle"]]
         for e in sorted(events, key=lambda ev: ev.timestamp_s):
             detail_parts = []
             if e.track_id_from is not None:
-                detail_parts.append(f"desde #{e.track_id_from}")
+                detail_parts.append(f"desde {labels.get(e.track_id_from, f'#{e.track_id_from}')}")
             if e.track_id_to is not None:
-                detail_parts.append(f"hacia #{e.track_id_to}")
+                detail_parts.append(f"hacia {labels.get(e.track_id_to, f'#{e.track_id_to}')}")
             if e.meta and "side" in e.meta:
                 detail_parts.append(f"portería {SIDE_LABELS.get(e.meta['side'], e.meta['side'])}")
             if e.meta and "team" in e.meta:
-                detail_parts.append(f"equipo {e.meta['team']}")
+                detail_parts.append(team_display_name(e.meta["team"], match.team_names))
             event_table_data.append(
                 [_format_ts(e.timestamp_s), EVENT_LABELS.get(e.event_type, e.event_type), ", ".join(detail_parts)]
             )

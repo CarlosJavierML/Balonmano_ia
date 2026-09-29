@@ -80,3 +80,20 @@ def test_frame_processor_collects_trajectories_and_colors():
     assert len(track_ids) == 2
     assert all(len(result.color_samples[t]) >= 3 for t in track_ids)
     assert len(assign_teams(result.color_samples).team_by_track) == 2
+
+
+def test_loud_referee_color_does_not_hijack_a_team():
+    # Four players per team plus a referee whose color is the most different
+    # from everything: seeding with "farthest colors" would pick the referee.
+    red = np.array([50.0, 200.0, 190.0])
+    blue = np.array([35.0, 150.0, 60.0])
+    samples = {i: [red + i] * 4 for i in range(4)}
+    samples.update({10 + i: [blue - i] * 4 for i in range(4)})
+    samples[99] = [np.array([100.0, 40.0, 250.0])] * 4
+
+    assignment = assign_teams(samples)
+
+    assert len({assignment.team_by_track[i] for i in range(4)}) == 1
+    assert len({assignment.team_by_track[10 + i] for i in range(4)}) == 1
+    assert assignment.team_by_track[0] != assignment.team_by_track[10]
+    assert assignment.outliers == {99}

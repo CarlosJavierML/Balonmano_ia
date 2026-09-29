@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import matches, reports, stream, upload
+from app.api.routes import calibration, matches, reports, stream, upload
 from app.config import settings
 from app.db import init_db
 
@@ -28,6 +28,7 @@ app.include_router(matches.router)
 app.include_router(upload.router)
 app.include_router(stream.router)
 app.include_router(reports.router)
+app.include_router(calibration.router)
 
 
 @app.get("/health")

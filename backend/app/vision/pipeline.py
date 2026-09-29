@@ -8,8 +8,11 @@ ByteTrack with a different detector/tracker later touches only this file).
 
 from __future__ import annotations
 
+import gzip
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -50,6 +53,39 @@ class TrackingResult:
     ball_frames: list[BallFrame] = field(default_factory=list)
     # Jersey color samples (Lab) per track id, for team assignment.
     color_samples: dict[int, list[np.ndarray]] = field(default_factory=dict)
+
+    def save(self, path: Path) -> None:
+        """Stores the raw trajectories (compact gzipped JSON) so the session
+        can be re-analyzed later -- e.g. after a manual team correction --
+        without running the vision models again."""
+        data = {
+            "fps": self.fps,
+            "duration_s": self.duration_s,
+            "calibrated": self.calibrated,
+            "players": [[round(f.t, 3), f.track_id, round(f.x, 3), round(f.y, 3)] for f in self.player_frames],
+            "ball": [[round(f.t, 3), round(f.x, 3), round(f.y, 3)] for f in self.ball_frames],
+            "colors": {
+                str(k): [[round(float(c), 2) for c in sample] for sample in v]
+                for k, v in self.color_samples.items()
+            },
+        }
+        with gzip.open(path, "wt", encoding="utf-8") as fh:
+            json.dump(data, fh, separators=(",", ":"))
+
+    @classmethod
+    def load(cls, path: Path) -> "TrackingResult":
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return cls(
+            fps=data["fps"],
+            duration_s=data["duration_s"],
+            calibrated=data["calibrated"],
+            player_frames=[TrackFrame(t=t, track_id=i, x=x, y=y) for t, i, x, y in data["players"]],
+            ball_frames=[BallFrame(t=t, x=x, y=y) for t, x, y in data["ball"]],
+            color_samples={
+                int(k): [np.asarray(s, dtype=np.float32) for s in v] for k, v in data["colors"].items()
+            },
+        )
 
 
 def _fallback_calibration(court: CourtConfig, frame_width: int, frame_height: int) -> CourtCalibration:

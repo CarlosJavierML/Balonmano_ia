@@ -215,9 +215,11 @@ def build_team_summary(
     """Per-team aggregate used by the dashboard and PDF report."""
     summary: dict[str, dict] = {}
     total_possession = sum(possession_s.values())
-    for team, color in sorted(team_colors.items()):
+    # Teams can exist without a detected color when the user assigns them
+    # by hand (e.g. the color clustering failed on this footage).
+    for team in sorted(set(team_colors) | set(teams.values())):
         summary[team] = {
-            "color": color,
+            "color": team_colors.get(team),
             "players": sum(1 for t in teams.values() if t == team),
             "possession_s": round(possession_s.get(team, 0.0), 1),
             "possession_pct": round(100 * possession_s.get(team, 0.0) / total_possession, 1)

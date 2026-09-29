@@ -19,6 +19,7 @@ export interface PlayerStat {
   player_id: number | null;
   label: string;
   team: TeamLabel | null;
+  role: PlayerRole | null;
   distance_m: number;
   avg_speed_kmh: number;
   max_speed_kmh: number;
@@ -28,9 +29,11 @@ export interface PlayerStat {
 }
 
 export type TeamLabel = "A" | "B";
+export type PlayerRole = "jugador" | "portero" | "arbitro";
+export type TeamNames = Partial<Record<TeamLabel, string>>;
 
 export interface TeamSummaryEntry {
-  color: string;
+  color: string | null;
   players: number;
   possession_s: number;
   possession_pct: number;
@@ -56,6 +59,9 @@ export interface MatchEvent {
 
 export interface MatchDetail extends Match {
   team_summary: TeamSummary | null;
+  team_names: TeamNames | null;
+  /** Whether team/role corrections can be applied (trajectories saved). */
+  editable: boolean;
   player_stats: PlayerStat[];
   events: MatchEvent[];
 }
@@ -72,4 +78,11 @@ export interface LiveStatsSnapshot {
 export interface PixelCorner {
   x: number;
   y: number;
+}
+
+export interface PlayerUpdate {
+  label?: string;
+  team?: TeamLabel | null;
+  role?: PlayerRole;
+  reset?: boolean;
 }

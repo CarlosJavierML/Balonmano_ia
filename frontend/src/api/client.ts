@@ -3,15 +3,29 @@ import type {
   Match,
   MatchDetail,
   PixelCorner,
+  PlayerUpdate,
+  TeamNames,
 } from "../types";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
+/** Human-readable error from a failed response (FastAPI's `detail` if present). */
+async function errorMessage(res: Response): Promise<string> {
+  const body = await res.text();
+  try {
+    const detail = JSON.parse(body).detail;
+    if (typeof detail === "string") return detail;
+    if (detail) return JSON.stringify(detail);
+  } catch {
+    // not JSON; fall through
+  }
+  return `${res.status} ${res.statusText}${body ? `: ${body}` : ""}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, init);
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    throw new Error(await errorMessage(res));
   }
   if (res.status === 204) {
     return undefined as T;
@@ -29,6 +43,30 @@ export function getMatch(id: number): Promise<MatchDetail> {
 
 export function deleteMatch(id: number): Promise<void> {
   return request<void>(`/matches/${id}`, { method: "DELETE" });
+}
+
+export function renameTeams(id: number, names: TeamNames): Promise<MatchDetail> {
+  return request<MatchDetail>(`/matches/${id}/teams`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ names }),
+  });
+}
+
+export function updatePlayer(id: number, trackId: number, update: PlayerUpdate): Promise<MatchDetail> {
+  return request<MatchDetail>(`/matches/${id}/players/${trackId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+}
+
+export async function suggestCorners(image: Blob): Promise<PixelCorner[]> {
+  const form = new FormData();
+  form.append("image", image, "frame.jpg");
+  const res = await fetch(`${API_URL}/calibration/suggest`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return (await res.json()).corners as PixelCorner[];
 }
 
 export function reportUrl(id: number): string {
@@ -79,15 +117,7 @@ export async function fetchStreamPreview(streamUrl: string): Promise<Blob> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stream_url: streamUrl }),
   });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      detail = (await res.json()).detail ?? detail;
-    } catch {
-      // non-JSON error body; keep statusText
-    }
-    throw new Error(`No se pudo obtener imagen del stream: ${detail}`);
-  }
+  if (!res.ok) throw new Error(`No se pudo obtener imagen del stream: ${await errorMessage(res)}`);
   return res.blob();
 }
 

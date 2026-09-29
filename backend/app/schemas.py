@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -41,6 +41,7 @@ class PlayerStatOut(BaseModel):
     player_id: int | None
     label: str
     team: str | None = None
+    role: str | None = None
     distance_m: float
     avg_speed_kmh: float
     max_speed_kmh: float
@@ -65,6 +66,9 @@ class EventOut(BaseModel):
 
 class MatchDetailOut(MatchOut):
     team_summary: dict[str, Any] | None = None
+    team_names: dict[str, str] | None = None
+    # Whether manual team/role corrections can be applied (trajectories saved).
+    editable: bool = False
     player_stats: list[PlayerStatOut] = []
     events: list[EventOut] = []
 
@@ -83,3 +87,22 @@ class LiveStatsSnapshot(BaseModel):
     recent_events: list[EventOut]
     player_stats: list[PlayerStatOut]
     team_summary: dict[str, Any] | None = None
+
+
+class TeamNamesIn(BaseModel):
+    names: dict[Literal["A", "B"], str]
+
+
+class PlayerUpdateIn(BaseModel):
+    """Manual correction of one tracked person. Omitted fields are left
+    unchanged; ``team: null`` explicitly removes the player from any team,
+    and ``reset: true`` drops earlier manual team/role corrections."""
+
+    label: str | None = Field(default=None, max_length=120)
+    team: Literal["A", "B"] | None = None
+    role: Literal["jugador", "portero", "arbitro"] | None = None
+    reset: bool = False
+
+
+class CornerSuggestionOut(BaseModel):
+    corners: list[PixelCorner]

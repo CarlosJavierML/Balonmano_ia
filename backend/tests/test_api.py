@@ -132,3 +132,96 @@ def test_live_preview_returns_jpeg_from_a_video_source(tmp_path):
 
         bad = client.post("/matches/live/preview", json={"stream_url": str(tmp_path / "nope.mp4")})
         assert bad.status_code == 400
+
+
+def _create_done_match(client) -> int:
+    async def create() -> int:
+        async with async_session_maker() as session:
+            match = Match(name="Correcciones", court_type="piso", source_mode="upload", status="processing")
+            session.add(match)
+            await session.commit()
+            match_id = match.id
+        await _persist_analysis(match_id, _synthetic_result())
+        return match_id
+
+    return client.portal.call(create)
+
+
+def test_tracking_result_roundtrips_through_disk(tmp_path):
+    original = _synthetic_result()
+    path = tmp_path / "tracking.json.gz"
+    original.save(path)
+    loaded = TrackingResult.load(path)
+
+    assert loaded.player_frames == original.player_frames
+    assert loaded.ball_frames == original.ball_frames
+    assert set(loaded.color_samples) == set(original.color_samples)
+    assert np.allclose(loaded.color_samples[1][0], original.color_samples[1][0], atol=0.01)
+
+
+def test_rename_teams_and_correct_a_player():
+    with TestClient(app) as client:
+        match_id = _create_done_match(client)
+        detail = client.get(f"/matches/{match_id}").json()
+        assert detail["editable"] is True
+        teams = {p["track_id"]: p["team"] for p in detail["player_stats"]}
+        other_team = "B" if teams[2] == "A" else "A"
+
+        renamed = client.patch(f"/matches/{match_id}/teams", json={"names": {"A": " Cadete ", "B": ""}}).json()
+        assert renamed["team_names"] == {"A": "Cadete"}
+
+        # Moving player 2 to the other team turns the 1 -> 2 pass into a turnover.
+        fixed = client.patch(f"/matches/{match_id}/players/2", json={"team": other_team, "label": "Lucía"}).json()
+        player2 = next(p for p in fixed["player_stats"] if p["track_id"] == 2)
+        assert player2["team"] == other_team and player2["label"] == "Lucía"
+        assert [e["event_type"] for e in fixed["events"]][0] == "perdida"
+
+        # Reset drops the manual team (the custom name stays).
+        reset = client.patch(f"/matches/{match_id}/players/2", json={"reset": True}).json()
+        player2 = next(p for p in reset["player_stats"] if p["track_id"] == 2)
+        assert player2["team"] == teams[2] and player2["label"] == "Lucía"
+        assert [e["event_type"] for e in reset["events"]] == ["pase", "perdida"]
+
+        # Marking as referee removes the player from any team.
+        ref = client.patch(f"/matches/{match_id}/players/3", json={"role": "arbitro"}).json()
+        player3 = next(p for p in ref["player_stats"] if p["track_id"] == 3)
+        assert player3["role"] == "arbitro" and player3["team"] is None
+
+        assert client.get(f"/matches/{match_id}/report").status_code == 200
+        assert client.patch(f"/matches/{match_id}/players/999", json={"label": "x"}).status_code == 404
+        assert client.patch(f"/matches/{match_id}/players/2", json={"team": "C"}).status_code == 422
+
+
+def test_team_corrections_need_saved_trajectories():
+    with TestClient(app) as client:
+        match_id = _create_done_match(client)
+
+        async def forget_tracking():
+            async with async_session_maker() as session:
+                match = await session.get(Match, match_id)
+                Path(match.tracking_path).unlink()
+
+        client.portal.call(forget_tracking)
+        assert client.get(f"/matches/{match_id}").json()["editable"] is False
+        assert client.patch(f"/matches/{match_id}/players/1", json={"team": "A"}).status_code == 409
+        # Renaming still works without trajectories.
+        assert client.patch(f"/matches/{match_id}/players/1", json={"label": "Ana"}).status_code == 200
+
+
+def test_calibration_suggestion_endpoint():
+    import cv2
+
+    frame = np.full((360, 640, 3), (50, 110, 170), dtype=np.uint8)
+    cv2.polylines(frame, [np.array([(120, 70), (520, 70), (615, 325), (25, 325)])], True, (245, 245, 245), 3)
+    ok, jpeg = cv2.imencode(".jpg", frame)
+
+    with TestClient(app) as client:
+        res = client.post("/calibration/suggest", files={"image": ("f.jpg", jpeg.tobytes(), "image/jpeg")})
+        assert res.status_code == 200
+        corners = [(c["x"], c["y"]) for c in res.json()["corners"]]
+        for (x, y), (ex, ey) in zip(corners, [(120, 70), (520, 70), (615, 325), (25, 325)]):
+            assert abs(x - ex) <= 8 and abs(y - ey) <= 8
+
+        blank = cv2.imencode(".jpg", np.zeros((100, 100, 3), dtype=np.uint8))[1].tobytes()
+        assert client.post("/calibration/suggest", files={"image": ("b.jpg", blank, "image/jpeg")}).status_code == 422
+        assert client.post("/calibration/suggest", files={"image": ("x.jpg", b"nope", "image/jpeg")}).status_code == 400

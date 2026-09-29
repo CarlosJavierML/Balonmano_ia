@@ -96,8 +96,10 @@ class CourtCalibration:
     """Pixel <-> world coordinate mapping for one fixed-camera setup.
 
     ``pixel_corners`` are the four court corners as seen by the camera, in
-    this order: top-left, top-right, bottom-right, bottom-left (matching a
-    bird's-eye view where "top" is one goal line and "bottom" the other).
+    this order: top-left, top-right, bottom-right, bottom-left. "Top" and
+    "bottom" are the two sidelines (the court's long edges, mapped to
+    x = 0..length_m) and "left"/"right" the two goal lines -- i.e. the view
+    from a camera placed along one sideline, the usual fixed setup.
     """
 
     def __init__(self, court: CourtConfig, pixel_corners: list[tuple[float, float]]):

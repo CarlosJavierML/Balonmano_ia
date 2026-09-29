@@ -7,8 +7,9 @@ DATA_DIR = BASE_DIR / "data"
 VIDEOS_DIR = DATA_DIR / "videos"
 REPORTS_DIR = DATA_DIR / "reports"
 HEATMAPS_DIR = DATA_DIR / "heatmaps"
+TRACKING_DIR = DATA_DIR / "tracking"
 
-for directory in (DATA_DIR, VIDEOS_DIR, REPORTS_DIR, HEATMAPS_DIR):
+for directory in (DATA_DIR, VIDEOS_DIR, REPORTS_DIR, HEATMAPS_DIR, TRACKING_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 

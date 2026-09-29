@@ -26,9 +26,15 @@ k-means de 2 clústeres; los tracks lejanos a ambos centroides (árbitros)
 quedan sin equipo. Con ello `tactical.py` distingue **pase** de
 **pérdida**, y se calcula posesión/pases/pérdidas/tiros/goles por equipo.
 
-Siguientes pasos posibles: clúster específico para porteros (que suelen
-llevar otra equipación), y permitir al usuario renombrar "Equipo A/B" o
-corregir a mano el equipo de un jugador.
+También hecho:
+- **Porteros** (`app/analysis/roles.py`): un track que pasa ≥70 % del tiempo
+  dentro de un área es portero; su equipo se deduce de a quién pasa el balón.
+- **Árbitros**: tracks con color fiable que no encaja en ningún equipo; se
+  excluyen de la posesión para que no "roben" el balón.
+- **Correcciones manuales**: renombrar equipos y jugadores, y corregir el
+  equipo/rol de un jugador. Las trayectorias se guardan
+  (`data/tracking/*.json.gz`), así que los eventos se recalculan sin volver
+  a procesar el vídeo.
 
 ## 3. Detección de eventos con un modelo entrenado (acción/vídeo)
 
@@ -55,12 +61,14 @@ la app a la vez:
 - Esto también permite reintentos automáticos y una cola visible del
   estado de cada análisis.
 
-## 5. Calibración asistida — ✅ clic sobre la imagen hecho
+## 5. Calibración asistida — ✅ hecho
 
-El formulario ya muestra un fotograma del vídeo (o una captura del stream
-en directo vía `POST /matches/live/preview`) para hacer clic en las 4
-esquinas. Pendiente: detectar automáticamente las líneas de la pista
-(transformada de Hough sobre las líneas blancas) como sugerencia inicial.
+El formulario muestra un fotograma del vídeo (o una captura del stream en
+directo vía `POST /matches/live/preview`), detecta automáticamente las 4
+esquinas a partir de las líneas blancas de la pista
+(`app/vision/court_lines.py`, `POST /calibration/suggest`) y permite
+arrastrarlas para ajustarlas. Posible mejora: detección basada en rectas
+(Hough) para pistas con líneas de varios colores o muy tapadas por jugadores.
 
 ## 6. GPU / rendimiento en directo
 

@@ -17,7 +17,8 @@ Vídeo subido / Stream RTSP
   Calibración de pista (homografía) → coordenadas mundo (metros)
         │
         ├──► app/analysis/physical.py  → distancia, velocidad, sprints, zonas, heatmap
-        ├──► app/analysis/teams.py     → equipo A/B por color de camiseta (k-means en Lab)
+        ├──► app/analysis/teams.py     → equipo A/B por color de camiseta (Lab)
+        ├──► app/analysis/roles.py     → portero (por posición) / árbitro (color atípico)
         └──► app/analysis/tactical.py  → posesión por equipo, pases, pérdidas, tiros, goles
         │
         ▼
@@ -60,7 +61,9 @@ Vídeo subido / Stream RTSP
 | `app/vision/pipeline.py` | `FrameProcessor` (detección + tracking + color de camiseta por frame) y el recorrido de un vídeo completo con progreso |
 | `app/vision/live.py` | Usa el mismo `FrameProcessor` de forma incremental, en un hilo, para RTSP; captura de fotograma para calibrar |
 | `app/analysis/teams.py` | Color de camiseta por jugador → equipo A/B (o sin equipo) |
-| `app/analysis/session.py` | Trayectorias → análisis completo (compartido por el worker y el directo) |
+| `app/analysis/roles.py` | Porteros (tiempo en el área + pases) y árbitros |
+| `app/vision/court_lines.py` | Sugerencia automática de las 4 esquinas a partir de las líneas |
+| `app/analysis/session.py` | Trayectorias (+ correcciones manuales) → análisis completo; lo usan el worker, el directo y las correcciones |
 | `app/analysis/physical.py` | Trayectorias → distancia/velocidad/sprints/zonas/heatmap |
 | `app/analysis/tactical.py` | Trayectorias + equipos → eventos (pase, pérdida, tiro, gol) y resumen por equipo |
 | `app/reports/pdf_report.py` | Estadísticas + eventos → PDF |

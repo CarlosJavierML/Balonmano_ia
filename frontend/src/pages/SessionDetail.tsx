@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { deleteMatch, getLiveSnapshot, getMatch, reportUrl, stopLiveMatch } from "../api/client";
+import {
+  deleteMatch,
+  getLiveSnapshot,
+  getMatch,
+  renameTeams,
+  reportUrl,
+  stopLiveMatch,
+  updatePlayer,
+} from "../api/client";
 import { CourtBadge, StatusBadge } from "../components/Badges";
 import EventsTimeline from "../components/EventsTimeline";
 import PlayerStatsTable from "../components/PlayerStatsTable";
 import { DistanceChart, SpeedChart } from "../components/StatsCharts";
 import TeamSummary from "../components/TeamSummary";
-import type { LiveStatsSnapshot, MatchDetail } from "../types";
+import type { LiveStatsSnapshot, MatchDetail, PlayerUpdate, TeamLabel } from "../types";
 
 const POLL_MS = 3000;
 
@@ -28,6 +36,8 @@ export default function SessionDetail() {
   const [liveSnapshot, setLiveSnapshot] = useState<LiveStatsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  // Errors from edits (rename/corrections) shouldn't replace the whole page.
+  const [actionError, setActionError] = useState<string | null>(null);
   const intervalRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -75,6 +85,26 @@ export default function SessionDetail() {
       setError(String(e));
     } finally {
       setStopping(false);
+    }
+  }
+
+  async function handleRenameTeam(team: TeamLabel, name: string) {
+    try {
+      setMatch(await renameTeams(matchId, { [team]: name }));
+      setActionError(null);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  }
+
+  async function handleUpdatePlayer(trackId: number, update: PlayerUpdate) {
+    try {
+      setMatch(await updatePlayer(matchId, trackId, update));
+      setActionError(null);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      throw e;
     }
   }
 
@@ -156,7 +186,7 @@ export default function SessionDetail() {
             </div>
             <div>
               <h3>Eventos</h3>
-              <EventsTimeline events={liveSnapshot.recent_events} />
+              <EventsTimeline events={liveSnapshot.recent_events} players={liveSnapshot.player_stats} />
             </div>
           </div>
           {liveSnapshot.team_summary && (
@@ -198,6 +228,12 @@ export default function SessionDetail() {
         </div>
       )}
 
+      {actionError && (
+        <div className="card">
+          <p className="error-text">{actionError}</p>
+        </div>
+      )}
+
       {match.status === "done" && (
         <>
           <div className="card">
@@ -219,7 +255,7 @@ export default function SessionDetail() {
 
           <div className="card">
             <h2>Equipos</h2>
-            <TeamSummary summary={match.team_summary} />
+            <TeamSummary summary={match.team_summary} names={match.team_names} onRename={handleRenameTeam} />
           </div>
 
           <div className="card">
@@ -234,16 +270,23 @@ export default function SessionDetail() {
 
           <div className="card">
             <h2>Estadísticas por jugador</h2>
+            <p className="helper-text" style={{ marginTop: -6 }}>
+              Pulsa «Editar» para poner nombre a un jugador o corregir su equipo o rol; los pases,
+              pérdidas y la posesión se recalculan al momento.
+            </p>
             <PlayerStatsTable
               matchId={match.id}
               players={match.player_stats}
               teamSummary={match.team_summary}
+              teamNames={match.team_names}
+              canEditTeams={match.editable}
+              onUpdate={handleUpdatePlayer}
             />
           </div>
 
           <div className="card">
             <h2>Eventos tácticos</h2>
-            <EventsTimeline events={match.events} />
+            <EventsTimeline events={match.events} players={match.player_stats} teamNames={match.team_names} />
           </div>
         </>
       )}

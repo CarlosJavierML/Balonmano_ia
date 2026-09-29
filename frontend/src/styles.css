@@ -526,3 +526,56 @@ th {
   gap: 10px;
   margin-top: 8px;
 }
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  color: var(--info);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.btn-small {
+  padding: 5px 10px;
+  font-size: 0.8rem;
+}
+
+.inline-edit {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.inline-edit input {
+  width: 140px;
+  padding: 5px 8px;
+}
+
+.editing-row td {
+  background: var(--accent-soft);
+}
+
+.editing-row input,
+.editing-row select {
+  padding: 5px 8px;
+  width: auto;
+  max-width: 160px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.calibration-canvas svg .corner-handle {
+  pointer-events: all;
+  cursor: grab;
+}
+
+.calibration-canvas.dragging,
+.calibration-canvas.dragging svg .corner-handle {
+  cursor: grabbing;
+}
