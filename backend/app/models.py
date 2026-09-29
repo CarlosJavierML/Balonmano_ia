@@ -42,11 +42,18 @@ class Match(Base):
     stream_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     calibration: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Fraction of the video analyzed so far, in [0, 1] (uploads only).
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    # Per-team aggregates (possession, passes, turnovers, shots, goals,
+    # jersey color) -- see app.analysis.tactical.build_team_summary.
+    team_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    player_stats: Mapped[list["PlayerMatchStat"]] = relationship(back_populates="match")
-    events: Mapped[list["Event"]] = relationship(back_populates="match")
+    player_stats: Mapped[list["PlayerMatchStat"]] = relationship(
+        back_populates="match", cascade="all, delete-orphan"
+    )
+    events: Mapped[list["Event"]] = relationship(back_populates="match", cascade="all, delete-orphan")
 
 
 class PlayerMatchStat(Base):
@@ -59,6 +66,7 @@ class PlayerMatchStat(Base):
     track_id: Mapped[int] = mapped_column(Integer)
     player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"), nullable=True)
     label: Mapped[str] = mapped_column(String(120), default="")
+    team: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "A" | "B" | None
 
     distance_m: Mapped[float] = mapped_column(Float, default=0.0)
     avg_speed_kmh: Mapped[float] = mapped_column(Float, default=0.0)

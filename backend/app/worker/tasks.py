@@ -9,10 +9,10 @@ job queue -- see docs/ROADMAP.md.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
-from app.analysis.physical import compute_player_stats
-from app.analysis.tactical import detect_events
+from app.analysis.session import analyze_session
 from app.config import HEATMAPS_DIR
 from app.court import CourtCalibration, CourtType, get_court_config
 from app.db import async_session_maker
@@ -21,6 +21,8 @@ from app.reports.pdf_report import render_heatmap_image
 from app.vision.pipeline import TrackingResult, VideoAnalysisPipeline
 
 logger = logging.getLogger(__name__)
+
+PROGRESS_FLUSH_S = 2.0
 
 
 def _build_calibration(match: Match) -> CourtCalibration | None:
@@ -31,6 +33,12 @@ def _build_calibration(match: Match) -> CourtCalibration | None:
     return CourtCalibration(court, corners)
 
 
+async def _stop_task(task: asyncio.Task) -> None:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
 async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
     async with async_session_maker() as session:
         match = await session.get(Match, match_id)
@@ -38,10 +46,9 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
             return
 
         court = get_court_config(CourtType(match.court_type))
-        player_stats = compute_player_stats(result.player_frames, court)
-        events = detect_events(result.player_frames, result.ball_frames, court)
+        analysis = analyze_session(result, court)
 
-        for track_id, stats in player_stats.items():
+        for track_id, stats in analysis.player_stats.items():
             heatmap_path = None
             if stats.heatmap_grid:
                 path = HEATMAPS_DIR / f"match_{match_id}_track_{track_id}.png"
@@ -53,6 +60,7 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
                     match_id=match_id,
                     track_id=track_id,
                     label=f"Jugador #{track_id}",
+                    team=analysis.team_by_track.get(track_id),
                     distance_m=stats.distance_m,
                     avg_speed_kmh=stats.avg_speed_kmh,
                     max_speed_kmh=stats.max_speed_kmh,
@@ -62,7 +70,7 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
                 )
             )
 
-        for ev in events:
+        for ev in analysis.events:
             session.add(
                 Event(
                     match_id=match_id,
@@ -77,6 +85,8 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
             )
 
         match.duration_s = result.duration_s
+        match.team_summary = analysis.team_summary or None
+        match.progress = 1.0
         match.status = "done"
         await session.commit()
 
@@ -92,9 +102,32 @@ async def process_uploaded_video(match_id: int) -> None:
         calibration = _build_calibration(match)
         await session.commit()
 
+    progress = {"value": 0.0}
+
+    def on_progress(value: float) -> None:
+        # Called from the analysis thread; a plain dict write is enough for
+        # the async flusher below to pick it up.
+        progress["value"] = value
+
+    async def flush_progress() -> None:
+        last_written = -1.0
+        while True:
+            await asyncio.sleep(PROGRESS_FLUSH_S)
+            value = round(progress["value"], 3)
+            if value == last_written:
+                continue
+            async with async_session_maker() as session:
+                match = await session.get(Match, match_id)
+                if match is not None and match.status == "processing":
+                    match.progress = value
+                    await session.commit()
+            last_written = value
+
+    flusher = asyncio.create_task(flush_progress())
     try:
         pipeline = VideoAnalysisPipeline()
-        result = await asyncio.to_thread(pipeline.analyze, video_path, court, calibration)
+        result = await asyncio.to_thread(pipeline.analyze, video_path, court, calibration, on_progress)
+        await _stop_task(flusher)
         await _persist_analysis(match_id, result)
     except Exception as exc:  # noqa: BLE001 - surface any failure on the match record
         logger.exception("Video analysis failed for match %s", match_id)
@@ -104,6 +137,8 @@ async def process_uploaded_video(match_id: int) -> None:
                 match.status = "failed"
                 match.error_message = str(exc)
                 await session.commit()
+    finally:
+        await _stop_task(flusher)
 
 
 async def finalize_live_session(match_id: int, result: TrackingResult) -> None:

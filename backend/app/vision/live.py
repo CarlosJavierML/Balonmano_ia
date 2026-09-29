@@ -18,8 +18,7 @@ import numpy as np
 from app.config import settings
 from app.court import CourtCalibration, CourtConfig
 from app.vision.detector import Detector
-from app.vision.pipeline import BallFrame, TrackFrame, TrackingResult
-from app.vision.tracker import BallTracker, PlayerTracker
+from app.vision.pipeline import FrameProcessor, TrackingResult, _fallback_calibration
 
 try:
     import cv2
@@ -77,6 +76,7 @@ class LiveSession:
                 calibrated=self.state.result.calibrated,
                 player_frames=list(self.state.result.player_frames),
                 ball_frames=list(self.state.result.ball_frames),
+                color_samples={k: list(v) for k, v in self.state.result.color_samples.items()},
             )
 
     def _run(self) -> None:
@@ -92,9 +92,9 @@ class LiveSession:
             return
 
         detector = Detector()
-        player_tracker = PlayerTracker()
-        ball_tracker = BallTracker()
-        calib = self.calibration
+        processor: FrameProcessor | None = None
+        # Owned by this thread; copied into the shared state under the lock.
+        color_samples: dict[int, list[np.ndarray]] = {}
 
         min_frame_interval = 1.0 / self.target_fps
         next_due = 0.0
@@ -114,34 +114,47 @@ class LiveSession:
                     continue
                 next_due = now + min_frame_interval
 
-                if calib is None:
-                    h, w = frame.shape[:2]
-                    from app.vision.pipeline import _fallback_calibration
+                if processor is None:
+                    calib = self.calibration
+                    if calib is None:
+                        h, w = frame.shape[:2]
+                        calib = _fallback_calibration(self.court, w, h)
+                    processor = FrameProcessor(detector, calib)
 
-                    calib = _fallback_calibration(self.court, w, h)
-
-                detections = detector.detect(frame)
-                tracked_players = player_tracker.update(detections.persons)
-                ball_point_px = ball_tracker.update(detections.balls)
-
+                # Detection runs outside the lock (it's the slow part); only
+                # appending to the shared result is done while holding it.
+                frame_result = TrackingResult(fps=self.target_fps, duration_s=0.0, calibrated=True)
+                frame_result.color_samples = color_samples
+                processor.process(frame, now, frame_result)
                 with self.state.lock:
-                    if tracked_players:
-                        anchors_px = np.array(
-                            [d.anchor_point for _, d in tracked_players], dtype=np.float32
-                        )
-                        world_pts = calib.pixel_to_world(anchors_px)
-                        for (track_id, _), (wx, wy) in zip(tracked_players, world_pts):
-                            self.state.result.player_frames.append(
-                                TrackFrame(t=now, track_id=track_id, x=float(wx), y=float(wy))
-                            )
-                    if ball_point_px is not None:
-                        world_pt = calib.pixel_to_world(np.array([ball_point_px], dtype=np.float32))[0]
-                        self.state.result.ball_frames.append(
-                            BallFrame(t=now, x=float(world_pt[0]), y=float(world_pt[1]))
-                        )
+                    self.state.result.player_frames.extend(frame_result.player_frames)
+                    self.state.result.ball_frames.extend(frame_result.ball_frames)
+                    for f in frame_result.player_frames:
+                        self.state.result.color_samples[f.track_id] = list(color_samples.get(f.track_id, []))
         finally:
             cap.release()
             self.state.connected = False
+
+
+def grab_preview_frame(stream_url: str, max_attempts: int = 25) -> bytes:
+    """Reads a single frame from a stream/camera and returns it JPEG-encoded."""
+    if cv2 is None:
+        raise RuntimeError("opencv-python is required for live streaming")
+    cap = cv2.VideoCapture(stream_url)
+    try:
+        if not cap.isOpened():
+            raise ValueError(f"No se pudo abrir el stream: {stream_url}")
+        # The first reads of some IP cameras return empty/grey frames while
+        # the decoder syncs to a keyframe; retry a few times.
+        for _ in range(max_attempts):
+            ok, frame = cap.read()
+            if ok and frame is not None and frame.size:
+                encoded_ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if encoded_ok:
+                    return buf.tobytes()
+        raise ValueError("El stream no devolvió ninguna imagen")
+    finally:
+        cap.release()
 
 
 class LiveSessionRegistry:

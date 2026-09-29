@@ -19,16 +19,16 @@ banquillo.
 3. Sustituir `settings.yolo_model_path` por el nuevo checkpoint — el resto
    del pipeline no cambia (misma interfaz `Detector.detect()`).
 
-## 2. Asignación de equipos (clustering de color de camiseta)
+## 2. Asignación de equipos (clustering de color de camiseta) — ✅ hecho
 
-Con esto se puede distinguir un **pase** (posesión pasa a un compañero) de
-una **pérdida de posesión** (pasa a un rival), y calcular estadísticas por
-equipo (posesión total, eficacia de tiro, etc.).
+Implementado en `app/analysis/teams.py`: color mediano del torso en Lab +
+k-means de 2 clústeres; los tracks lejanos a ambos centroides (árbitros)
+quedan sin equipo. Con ello `tactical.py` distingue **pase** de
+**pérdida**, y se calcula posesión/pases/pérdidas/tiros/goles por equipo.
 
-**Plan**: extraer el color dominante de la camiseta en el recorte de cada
-detección de jugador (k-means sobre el tercio superior del bounding box) y
-agrupar en 2-3 clústeres (equipo A / equipo B / árbitro). Guardar el
-`team_label` en cada `TrackFrame` y usarlo en `app/analysis/tactical.py`.
+Siguientes pasos posibles: clúster específico para porteros (que suelen
+llevar otra equipación), y permitir al usuario renombrar "Equipo A/B" o
+corregir a mano el equipo de un jugador.
 
 ## 3. Detección de eventos con un modelo entrenado (acción/vídeo)
 
@@ -55,16 +55,12 @@ la app a la vez:
 - Esto también permite reintentos automáticos y una cola visible del
   estado de cada análisis.
 
-## 5. Calibración asistida
+## 5. Calibración asistida — ✅ clic sobre la imagen hecho
 
-Hoy la calibración es manual (introducir 4 puntos en píxeles a mano). Se
-podría:
-
-- Mostrar el primer frame del vídeo en el formulario de subida y dejar al
-  usuario hacer clic directamente sobre las 4 esquinas (en vez de escribir
-  coordenadas).
-- Detectar automáticamente las líneas de la pista (Hough transform sobre
-  las líneas blancas) como punto de partida sugerido.
+El formulario ya muestra un fotograma del vídeo (o una captura del stream
+en directo vía `POST /matches/live/preview`) para hacer clic en las 4
+esquinas. Pendiente: detectar automáticamente las líneas de la pista
+(transformada de Hough sobre las líneas blancas) como sugerencia inicial.
 
 ## 6. GPU / rendimiento en directo
 

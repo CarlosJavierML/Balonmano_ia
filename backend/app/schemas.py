@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PixelCorner(BaseModel):
@@ -29,17 +29,18 @@ class MatchOut(BaseModel):
     source_mode: str
     status: str
     duration_s: float | None
+    progress: float = 0.0
     error_message: str | None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PlayerStatOut(BaseModel):
     track_id: int
     player_id: int | None
     label: str
+    team: str | None = None
     distance_m: float
     avg_speed_kmh: float
     max_speed_kmh: float
@@ -47,8 +48,7 @@ class PlayerStatOut(BaseModel):
     time_in_zones: dict[str, Any]
     heatmap_path: str | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EventOut(BaseModel):
@@ -60,11 +60,11 @@ class EventOut(BaseModel):
     y: float | None
     meta: dict[str, Any]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MatchDetailOut(MatchOut):
+    team_summary: dict[str, Any] | None = None
     player_stats: list[PlayerStatOut] = []
     events: list[EventOut] = []
 
@@ -82,3 +82,4 @@ class LiveStatsSnapshot(BaseModel):
     active_tracks: int
     recent_events: list[EventOut]
     player_stats: list[PlayerStatOut]
+    team_summary: dict[str, Any] | None = None

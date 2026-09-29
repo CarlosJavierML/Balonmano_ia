@@ -5,6 +5,7 @@ import { CourtBadge, StatusBadge } from "../components/Badges";
 import EventsTimeline from "../components/EventsTimeline";
 import PlayerStatsTable from "../components/PlayerStatsTable";
 import { DistanceChart, SpeedChart } from "../components/StatsCharts";
+import TeamSummary from "../components/TeamSummary";
 import type { LiveStatsSnapshot, MatchDetail } from "../types";
 
 const POLL_MS = 3000;
@@ -158,6 +159,12 @@ export default function SessionDetail() {
               <EventsTimeline events={liveSnapshot.recent_events} />
             </div>
           </div>
+          {liveSnapshot.team_summary && (
+            <div style={{ marginTop: 18 }}>
+              <h3>Equipos</h3>
+              <TeamSummary summary={liveSnapshot.team_summary} />
+            </div>
+          )}
         </div>
       )}
 
@@ -168,6 +175,20 @@ export default function SessionDetail() {
               ? "En cola para su análisis…"
               : "Analizando el vídeo con el motor de visión (detección, tracking y eventos). Esto puede tardar varios minutos según la duración del vídeo…"}
           </p>
+          {match.status === "processing" && match.source_mode === "upload" && (
+            <>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(match.progress * 100)}
+              >
+                <div className="progress-fill" style={{ width: `${Math.round(match.progress * 100)}%` }} />
+              </div>
+              <p className="helper-text">{Math.round(match.progress * 100)}% completado</p>
+            </>
+          )}
         </div>
       )}
 
@@ -197,6 +218,11 @@ export default function SessionDetail() {
           </div>
 
           <div className="card">
+            <h2>Equipos</h2>
+            <TeamSummary summary={match.team_summary} />
+          </div>
+
+          <div className="card">
             <h2>Distancia recorrida</h2>
             <DistanceChart players={match.player_stats} />
           </div>
@@ -208,7 +234,11 @@ export default function SessionDetail() {
 
           <div className="card">
             <h2>Estadísticas por jugador</h2>
-            <PlayerStatsTable matchId={match.id} players={match.player_stats} />
+            <PlayerStatsTable
+              matchId={match.id}
+              players={match.player_stats}
+              teamSummary={match.team_summary}
+            />
           </div>
 
           <div className="card">

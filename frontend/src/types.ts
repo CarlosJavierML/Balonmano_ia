@@ -9,6 +9,7 @@ export interface Match {
   source_mode: SourceMode;
   status: MatchStatus;
   duration_s: number | null;
+  progress: number;
   error_message: string | null;
   created_at: string;
 }
@@ -17,6 +18,7 @@ export interface PlayerStat {
   track_id: number;
   player_id: number | null;
   label: string;
+  team: TeamLabel | null;
   distance_m: number;
   avg_speed_kmh: number;
   max_speed_kmh: number;
@@ -25,7 +27,22 @@ export interface PlayerStat {
   heatmap_path: string | null;
 }
 
-export type EventType = "cambio_posesion" | "tiro" | "gol";
+export type TeamLabel = "A" | "B";
+
+export interface TeamSummaryEntry {
+  color: string;
+  players: number;
+  possession_s: number;
+  possession_pct: number;
+  pases: number;
+  perdidas: number;
+  tiros: number;
+  goles: number;
+}
+
+export type TeamSummary = Partial<Record<TeamLabel, TeamSummaryEntry>>;
+
+export type EventType = "pase" | "perdida" | "cambio_posesion" | "tiro" | "gol";
 
 export interface MatchEvent {
   event_type: EventType;
@@ -38,6 +55,7 @@ export interface MatchEvent {
 }
 
 export interface MatchDetail extends Match {
+  team_summary: TeamSummary | null;
   player_stats: PlayerStat[];
   events: MatchEvent[];
 }
@@ -48,6 +66,7 @@ export interface LiveStatsSnapshot {
   active_tracks: number;
   recent_events: MatchEvent[];
   player_stats: PlayerStat[];
+  team_summary: TeamSummary | null;
 }
 
 export interface PixelCorner {

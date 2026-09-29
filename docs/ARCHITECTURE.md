@@ -17,7 +17,8 @@ Vídeo subido / Stream RTSP
   Calibración de pista (homografía) → coordenadas mundo (metros)
         │
         ├──► app/analysis/physical.py  → distancia, velocidad, sprints, zonas, heatmap
-        └──► app/analysis/tactical.py  → posesión, pases, tiros, goles
+        ├──► app/analysis/teams.py     → equipo A/B por color de camiseta (k-means en Lab)
+        └──► app/analysis/tactical.py  → posesión por equipo, pases, pérdidas, tiros, goles
         │
         ▼
   Persistencia (SQLite vía SQLAlchemy async): Match, PlayerMatchStat, Event
@@ -56,9 +57,12 @@ Vídeo subido / Stream RTSP
 | `app/court.py` | Dimensiones de pista/playa, homografía píxel↔metros |
 | `app/vision/detector.py` | Envoltorio de YOLOv8 |
 | `app/vision/tracker.py` | ByteTrack para jugadores, tracker propio para el balón |
-| `app/vision/pipeline.py` | Orquesta un vídeo completo → trayectorias en metros |
-| `app/vision/live.py` | Igual que `pipeline.py` pero incremental, en un hilo, para RTSP |
+| `app/vision/pipeline.py` | `FrameProcessor` (detección + tracking + color de camiseta por frame) y el recorrido de un vídeo completo con progreso |
+| `app/vision/live.py` | Usa el mismo `FrameProcessor` de forma incremental, en un hilo, para RTSP; captura de fotograma para calibrar |
+| `app/analysis/teams.py` | Color de camiseta por jugador → equipo A/B (o sin equipo) |
+| `app/analysis/session.py` | Trayectorias → análisis completo (compartido por el worker y el directo) |
 | `app/analysis/physical.py` | Trayectorias → distancia/velocidad/sprints/zonas/heatmap |
-| `app/analysis/tactical.py` | Trayectorias → eventos (posesión, tiro, gol) |
+| `app/analysis/tactical.py` | Trayectorias + equipos → eventos (pase, pérdida, tiro, gol) y resumen por equipo |
 | `app/reports/pdf_report.py` | Estadísticas + eventos → PDF |
 | `app/worker/tasks.py` | Pega todo lo anterior y persiste en BD |
+| `app/db.py` | Sesiones de BD y una migración mínima que añade columnas nuevas a BDs existentes |

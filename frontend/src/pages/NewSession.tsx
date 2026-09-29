@@ -14,12 +14,17 @@ export default function NewSession() {
   const [file, setFile] = useState<File | null>(null);
   const [streamUrl, setStreamUrl] = useState("");
   const [corners, setCorners] = useState<PixelCorner[] | undefined>(undefined);
+  const [calibrationIncomplete, setCalibrationIncomplete] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (calibrationIncomplete) {
+      setError("Termina de marcar las 4 esquinas o desactiva la calibración.");
+      return;
+    }
     setSubmitting(true);
     try {
       if (mode === "upload") {
@@ -39,7 +44,7 @@ export default function NewSession() {
   }
 
   return (
-    <div className="container" style={{ maxWidth: 640 }}>
+    <div className="container" style={{ maxWidth: 760 }}>
       <div className="page-header">
         <div>
           <h1>Nueva sesión</h1>
@@ -104,7 +109,15 @@ export default function NewSession() {
           </div>
         )}
 
-        <CalibrationFields onChange={setCorners} />
+        <CalibrationFields
+          videoFile={mode === "upload" ? file : null}
+          streamUrl={mode === "live" ? streamUrl : undefined}
+          onChange={(next, incomplete) => {
+            setCorners(next);
+            setCalibrationIncomplete(incomplete);
+            if (!incomplete) setError(null);
+          }}
+        />
 
         {error && <p className="error-text">{error}</p>}
 

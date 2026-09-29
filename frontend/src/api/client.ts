@@ -73,6 +73,24 @@ export function startLiveMatch(params: {
   });
 }
 
+export async function fetchStreamPreview(streamUrl: string): Promise<Blob> {
+  const res = await fetch(`${API_URL}/matches/live/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stream_url: streamUrl }),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      // non-JSON error body; keep statusText
+    }
+    throw new Error(`No se pudo obtener imagen del stream: ${detail}`);
+  }
+  return res.blob();
+}
+
 export function stopLiveMatch(id: number): Promise<Match> {
   return request<Match>(`/matches/live/${id}/stop`, { method: "POST" });
 }

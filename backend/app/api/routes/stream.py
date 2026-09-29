@@ -1,19 +1,37 @@
+import asyncio
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.physical import compute_player_stats
-from app.analysis.tactical import detect_events
+from app.analysis.session import analyze_session
 from app.court import CourtCalibration, CourtType, get_court_config
 from app.db import get_session
 from app.models import Match
 from app.schemas import LiveStatsSnapshot, LiveStreamStart, MatchOut, PlayerStatOut
-from app.vision.live import LiveSession, live_registry
+from app.vision.live import LiveSession, grab_preview_frame, live_registry
 from app.worker.tasks import finalize_live_session
 
 router = APIRouter(prefix="/matches/live", tags=["live"])
 
 RECENT_EVENTS_LIMIT = 20
 ACTIVE_TRACK_WINDOW_S = 3.0
+
+
+class PreviewRequest(BaseModel):
+    stream_url: str
+
+
+@router.post("/preview", response_class=Response)
+async def preview_stream_frame(payload: PreviewRequest):
+    """Returns one JPEG frame from the stream, so the user can click the
+    court corners on it to calibrate before starting the live session."""
+    try:
+        jpeg = await asyncio.to_thread(grab_preview_frame, payload.stream_url)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=jpeg, media_type="image/jpeg")
 
 
 @router.post("/start", response_model=MatchOut)
@@ -56,8 +74,10 @@ async def stop_live_match(
     if live_session is None:
         raise HTTPException(status_code=404, detail="No hay una transmisión activa con ese id")
 
-    result = live_session.snapshot()
+    # Stop first so the snapshot includes every frame processed up to the
+    # moment the capture thread exits.
     live_session.stop()
+    result = live_session.snapshot()
     live_registry.remove(match_id)
 
     match = await session.get(Match, match_id)
@@ -81,9 +101,8 @@ async def live_snapshot(match_id: int, session: AsyncSession = Depends(get_sessi
     court = get_court_config(CourtType(match.court_type))
     result = live_session.snapshot()
 
-    player_stats = compute_player_stats(result.player_frames, court)
-    events = detect_events(result.player_frames, result.ball_frames, court)
-    recent_events = events[-RECENT_EVENTS_LIMIT:]
+    analysis = analyze_session(result, court)
+    recent_events = analysis.events[-RECENT_EVENTS_LIMIT:]
 
     active_cutoff = result.duration_s - ACTIVE_TRACK_WINDOW_S
     active_tracks = len({f.track_id for f in result.player_frames if f.t >= active_cutoff})
@@ -109,6 +128,7 @@ async def live_snapshot(match_id: int, session: AsyncSession = Depends(get_sessi
                 track_id=s.track_id,
                 player_id=None,
                 label=f"Jugador #{s.track_id}",
+                team=analysis.team_by_track.get(s.track_id),
                 distance_m=s.distance_m,
                 avg_speed_kmh=s.avg_speed_kmh,
                 max_speed_kmh=s.max_speed_kmh,
@@ -116,6 +136,7 @@ async def live_snapshot(match_id: int, session: AsyncSession = Depends(get_sessi
                 time_in_zones=s.time_in_zones,
                 heatmap_path=None,
             )
-            for s in player_stats.values()
+            for s in analysis.player_stats.values()
         ],
+        team_summary=analysis.team_summary or None,
     )

@@ -1,6 +1,8 @@
 import type { MatchEvent } from "../types";
 
 const EVENT_LABEL: Record<string, string> = {
+  pase: "Pase",
+  perdida: "Pérdida de balón",
   cambio_posesion: "Cambio de posesión",
   tiro: "Tiro",
   gol: "¡Gol!",
@@ -17,13 +19,23 @@ function formatTs(seconds: number): string {
 }
 
 function describe(event: MatchEvent): string {
-  if (event.event_type === "cambio_posesion") {
-    return `#${event.track_id_from} → #${event.track_id_to}`;
+  if (
+    event.event_type === "cambio_posesion" ||
+    event.event_type === "pase" ||
+    event.event_type === "perdida"
+  ) {
+    const teamFrom = event.meta?.team_from as string | undefined;
+    const teamTo = event.meta?.team_to as string | undefined;
+    const from = `#${event.track_id_from}${teamFrom ? ` (${teamFrom})` : ""}`;
+    const to = `#${event.track_id_to}${teamTo ? ` (${teamTo})` : ""}`;
+    return `${from} → ${to}`;
   }
   if (event.event_type === "tiro" || event.event_type === "gol") {
     const side = event.meta?.side as string | undefined;
     const speed = event.meta?.speed_kmh as number | undefined;
+    const team = event.meta?.team as string | undefined;
     const parts = [];
+    if (team) parts.push(`equipo ${team}`);
     if (side) parts.push(`portería ${side === "left" ? "izquierda" : "derecha"}`);
     if (speed) parts.push(`${speed} km/h`);
     return parts.join(" · ");

@@ -43,10 +43,14 @@ equipos, etc.).
 4. **Estadísticas físicas**: a partir de las trayectorias en metros se
    calcula distancia recorrida, velocidad media/máxima, sprints y mapas de
    calor por jugador.
-5. **Eventos tácticos**: reglas sobre la posición/velocidad del balón
-   respecto a los jugadores y las porterías detectan cambios de posesión,
-   tiros y goles.
-6. **Informe**: todo se persiste en base de datos y se puede descargar como
+5. **Equipos**: el color de la camiseta de cada jugador (tercio superior
+   del recorte, en espacio de color Lab) se agrupa en dos equipos con
+   k-means; árbitros y personas con colores muy distintos quedan sin equipo.
+6. **Eventos tácticos**: reglas sobre la posición/velocidad del balón
+   respecto a los jugadores y las porterías detectan pases (entre
+   compañeros), pérdidas de balón (al rival), tiros y goles, además del
+   % de posesión de cada equipo.
+7. **Informe**: todo se persiste en base de datos y se puede descargar como
    PDF con gráficas, tablas y mapas de calor.
 
 ## Puesta en marcha rápida (Docker)
@@ -97,10 +101,11 @@ Abre http://localhost:5173.
 2. Elige la modalidad (pista o playa).
 3. Elige **Subir vídeo** (arrastra el archivo grabado con tu cámara fija) o
    **En directo** (introduce la URL RTSP de tu cámara).
-4. (Recomendado) Activa la **calibración manual** e indica en píxeles las 4
-   esquinas de la pista tal y como aparecen en la imagen de tu cámara —
-   mejora mucho la precisión de distancias y velocidades.
-5. Espera a que el análisis termine (o, en directo, observa las
+4. (Recomendado) Activa la **calibración**, pulsa **Marcar sobre la imagen**
+   y haz clic en las 4 esquinas de la pista sobre un fotograma de tu vídeo
+   (o una captura de la cámara en directo). También se pueden escribir las
+   coordenadas a mano. Mejora mucho la precisión de distancias y velocidades.
+5. Espera a que el análisis termine (con barra de progreso) (o, en directo, observa las
    estadísticas en tiempo real y pulsa **Detener transmisión** cuando
    acabes).
 6. Consulta el dashboard de la sesión y descarga el **informe en PDF**.
@@ -116,8 +121,9 @@ arquitectura:
   lo que puede perder el balón en momentos de oclusión o mucho movimiento.
 - Los eventos tácticos (pase, tiro, gol) se detectan con reglas basadas en
   posición/velocidad, no con un modelo entrenado en acciones de balonmano.
-- No hay todavía asignación automática de equipos (por color de camiseta),
-  así que no se distingue un pase de una pérdida de posesión.
+- La asignación de equipos por color de camiseta asume dos equipaciones
+  bien diferenciadas; con colores parecidos (o porteros con otra
+  equipación) algunos jugadores pueden quedar sin equipo.
 
 Todo esto está detallado, con plan concreto de mejora, en
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
