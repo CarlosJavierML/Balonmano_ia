@@ -78,9 +78,26 @@ falta instalar la build de PyTorch con soporte CUDA correspondiente al
 hardware del club. Para RTSP de alta resolución, considerar bajar la
 resolución de captura o el `analysis_target_fps` en `app/config.py`.
 
-## 7. Multi-cámara
+## 7. Multi-cámara — ✅ hecho
 
-La arquitectura actual asume una única cámara fija. Para pistas con varias
-cámaras (p. ej. una por cada mitad de pista), el siguiente paso natural es
-fusionar trayectorias de varias fuentes usando la misma homografía por
-cámara y reconciliar IDs de tracking entre cámaras (re-identificación).
+Hasta 4 cámaras por sesión, tanto con vídeos subidos como en directo:
+
+- **Calibración por zona** (`app/court.py`): cada cámara se calibra con las
+  esquinas de la zona que ve (pista completa, mitad izquierda o derecha),
+  así que todas acaban en las mismas coordenadas en metros.
+- **Sincronización** (`app/vision/audio_sync.py`): automática por el sonido
+  (correlación de los "golpes" de audio: silbato, botes, lanzamientos),
+  manual, o por el reloj del servidor en directo. Se puede corregir después
+  y las cámaras se vuelven a unir sin repetir el análisis de vídeo.
+- **Fusión** (`app/vision/fusion.py`): une a la misma persona vista por dos
+  cámaras a la vez, encadena relevos entre cámaras (y cortes del tracker)
+  por posición, tiempo y color de camiseta, e interpola todas las
+  trayectorias en una rejilla temporal común.
+
+Siguientes pasos posibles:
+- Re-identificación por apariencia (un modelo de re-ID) para relevos con
+  huecos largos, donde hoy se crea una persona nueva.
+- Aplicar el encadenado de cortes del tracker también a sesiones de una sola
+  cámara (hoy la fusión solo se usa con 2+ cámaras).
+- Zonas personalizadas (p. ej. una cámara detrás de la portería) indicando
+  las coordenadas en metros de los 4 puntos.

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PixelCorner(BaseModel):
@@ -14,6 +14,9 @@ class CalibrationIn(BaseModel):
     used to compute the pixel-to-world homography for this fixed camera."""
 
     corners: list[PixelCorner] = Field(min_length=4, max_length=4)
+    # Which part of the court those corners delimit (multi-camera setups
+    # where each camera films one half).
+    region: Literal["full", "left", "right"] = "full"
 
 
 class MatchCreate(BaseModel):
@@ -87,9 +90,54 @@ class QueueItemOut(JobOut):
     progress: float
 
 
+class CameraOut(BaseModel):
+    index: int
+    name: str
+    region: str
+    calibrated: bool
+    time_offset_s: float | None
+    sync_info: dict[str, Any] | None
+    source: str  # "video" | "stream"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_orm(cls, value: Any) -> Any:
+        # Built from the `Camera` ORM row (MatchDetailOut.model_validate).
+        if hasattr(value, "stream_url") and hasattr(value, "calibration"):
+            return {
+                "index": value.index,
+                "name": value.name,
+                "region": value.region,
+                "calibrated": value.calibration is not None,
+                "time_offset_s": value.time_offset_s,
+                "sync_info": value.sync_info,
+                "source": "stream" if value.stream_url else "video",
+            }
+        return value
+
+
+class CameraIn(BaseModel):
+    """Per-camera settings for multi-camera uploads/streams (same order as the files)."""
+
+    name: str = Field(default="", max_length=120)
+    region: Literal["full", "left", "right"] = "full"
+    calibration: CalibrationIn | None = None
+    # None = automatic (from the audio, uploads only); camera 0 is the reference.
+    time_offset_s: float | None = None
+
+
+class CameraUpdateIn(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    time_offset_s: float | None = None
+    # true = go back to automatic (audio) sync for this camera.
+    auto_sync: bool = False
+
+
 class MatchDetailOut(MatchOut):
     # The queued/running analysis job for this session, if any.
     active_job: JobOut | None = None
+    cameras: list[CameraOut] = []
+    fusion_report: dict[str, Any] | None = None
     team_summary: dict[str, Any] | None = None
     team_names: dict[str, str] | None = None
     # Whether manual team/role corrections can be applied (trajectories saved).
@@ -98,11 +146,20 @@ class MatchDetailOut(MatchOut):
     events: list[EventOut] = []
 
 
+class LiveCameraIn(BaseModel):
+    stream_url: str
+    name: str = Field(default="", max_length=120)
+    region: Literal["full", "left", "right"] = "full"
+    calibration: CalibrationIn | None = None
+
+
 class LiveStreamStart(BaseModel):
     name: str
     court_type: str
-    stream_url: str
+    # Single camera: stream_url (+ calibration). Several cameras: `cameras`.
+    stream_url: str | None = None
     calibration: CalibrationIn | None = None
+    cameras: list[LiveCameraIn] | None = Field(default=None, max_length=4)
 
 
 class LiveStatsSnapshot(BaseModel):

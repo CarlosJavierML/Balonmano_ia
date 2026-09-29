@@ -1,18 +1,20 @@
 import asyncio
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.session import analyze_session
-from app.court import CourtCalibration, CourtType, get_court_config
+from app.court import CourtRegion, CourtType, get_court_config
 from app.db import get_session
-from app.models import Match
+from app.models import Camera, Match
 from app.schemas import LiveStatsSnapshot, LiveStreamStart, MatchOut, PlayerStatOut
-from app.vision.live import LiveSession, grab_preview_frame, live_registry
+from app.vision.live import LiveSession, MultiCameraLiveSession, grab_preview_frame, live_registry
 from app.worker.queue import enqueue
-from app.worker.tasks import tracking_path_for
+from app.worker.tasks import build_calibration, tracking_path_for
 
 router = APIRouter(prefix="/matches/live", tags=["live"])
 
@@ -41,29 +43,51 @@ async def start_live_match(payload: LiveStreamStart, session: AsyncSession = Dep
         raise HTTPException(status_code=400, detail="court_type debe ser 'piso' o 'playa'")
 
     court = get_court_config(CourtType(payload.court_type))
-    calibration = None
-    calibration_json = None
-    if payload.calibration:
-        calibration_json = payload.calibration.model_dump()
-        corners = [(c.x, c.y) for c in payload.calibration.corners]
-        calibration = CourtCalibration(court, corners)
+    match = Match(name=payload.name, court_type=payload.court_type, source_mode="live", status="processing")
 
-    match = Match(
-        name=payload.name,
-        court_type=payload.court_type,
-        source_mode="live",
-        status="processing",
-        stream_url=payload.stream_url,
-        calibration=calibration_json,
-    )
+    if payload.cameras and len(payload.cameras) > 1:
+        clock_start = time.time()
+        sessions: list[tuple[int, LiveSession]] = []
+        for index, cam in enumerate(payload.cameras):
+            calib_json = cam.calibration.model_dump() if cam.calibration else None
+            if calib_json is not None:
+                calib_json["region"] = cam.region
+            match.cameras.append(
+                Camera(
+                    index=index,
+                    name=cam.name or f"Cámara {index + 1}",
+                    region=cam.region,
+                    stream_url=cam.stream_url,
+                    calibration=calib_json,
+                    time_offset_s=None,  # synced by the shared server clock
+                )
+            )
+            live = LiveSession(
+                cam.stream_url,
+                court,
+                build_calibration(court, calib_json),
+                region=CourtRegion(cam.region),
+                clock_start=clock_start,
+            )
+            sessions.append((index, live))
+        live_session: LiveSession | MultiCameraLiveSession = MultiCameraLiveSession(sessions, court)
+    else:
+        single = payload.cameras[0] if payload.cameras else None
+        stream_url = single.stream_url if single else payload.stream_url
+        if not stream_url:
+            raise HTTPException(status_code=400, detail="Indica la URL del stream")
+        calibration_json = (single.calibration if single else payload.calibration)
+        calibration_json = calibration_json.model_dump() if calibration_json else None
+        match.stream_url = stream_url
+        match.calibration = calibration_json
+        live_session = LiveSession(stream_url, court, build_calibration(court, calibration_json))
+
     session.add(match)
     await session.commit()
     await session.refresh(match)
 
-    live_session = LiveSession(payload.stream_url, court, calibration)
     live_session.start()
     live_registry.add(match.id, live_session)
-
     return match
 
 
@@ -85,9 +109,20 @@ async def stop_live_match(match_id: int, session: AsyncSession = Depends(get_ses
 
     # Save the trajectories and let the queue worker do the (quick) final
     # analysis, so it's retried/visible like any other job.
-    tracking_path = tracking_path_for(match_id)
-    await asyncio.to_thread(result.save, tracking_path)
-    match.tracking_path = str(tracking_path)
+    if isinstance(live_session, MultiCameraLiveSession):
+        # Per-camera trajectories; the worker fuses them.
+        cameras = {
+            c.index: c
+            for c in (await session.execute(select(Camera).where(Camera.match_id == match_id))).scalars()
+        }
+        for index, cam_result in live_session.camera_snapshots():
+            path = tracking_path_for(match_id, index)
+            await asyncio.to_thread(cam_result.save, path)
+            cameras[index].tracking_path = str(path)
+    else:
+        tracking_path = tracking_path_for(match_id)
+        await asyncio.to_thread(result.save, tracking_path)
+        match.tracking_path = str(tracking_path)
     match.duration_s = result.duration_s
     await enqueue(session, match, "tracking")
     await session.commit()

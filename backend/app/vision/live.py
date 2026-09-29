@@ -16,8 +16,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from app.config import settings
-from app.court import CourtCalibration, CourtConfig
+from app.court import CourtCalibration, CourtConfig, CourtRegion
 from app.vision.detector import Detector
+from app.vision.fusion import CameraTracking, fuse_cameras
 from app.vision.pipeline import FrameProcessor, TrackingResult, _fallback_calibration
 
 try:
@@ -44,15 +45,20 @@ class LiveSession:
         court: CourtConfig,
         calibration: CourtCalibration | None,
         target_fps: float | None = None,
+        region: CourtRegion = CourtRegion.FULL,
+        clock_start: float | None = None,
     ):
+        """``clock_start`` (a `time.time()` value) lets several cameras of the
+        same session share one clock, so their timestamps are already in sync."""
         self.stream_url = stream_url
         self.court = court
         self.calibration = calibration
+        self.region = CourtRegion(region)
         self.target_fps = target_fps or settings.analysis_target_fps
 
         self.state = LiveState(
             result=TrackingResult(fps=self.target_fps, duration_s=0.0, calibrated=calibration is not None),
-            started_at=time.time(),
+            started_at=clock_start if clock_start is not None else time.time(),
         )
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -60,6 +66,10 @@ class LiveSession:
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def request_stop(self) -> None:
+        """Signals the capture thread to exit without waiting for it."""
+        self._stop_event.set()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -98,7 +108,7 @@ class LiveSession:
 
         min_frame_interval = 1.0 / self.target_fps
         next_due = 0.0
-        start = time.time()
+        start = self.state.started_at
 
         try:
             while not self._stop_event.is_set():
@@ -118,7 +128,7 @@ class LiveSession:
                     calib = self.calibration
                     if calib is None:
                         h, w = frame.shape[:2]
-                        calib = _fallback_calibration(self.court, w, h)
+                        calib = _fallback_calibration(self.court, w, h, self.region)
                     processor = FrameProcessor(detector, calib)
 
                 # Detection runs outside the lock (it's the slow part); only
@@ -157,6 +167,40 @@ def grab_preview_frame(stream_url: str, max_attempts: int = 25) -> bytes:
         cap.release()
 
 
+class MultiCameraLiveSession:
+    """Several cameras of one live session: one capture thread per camera on
+    a shared clock. `snapshot()` returns the fused view (same interface as
+    `LiveSession`), `camera_snapshots()` each camera's own trajectories."""
+
+    def __init__(self, cameras: list[tuple[int, LiveSession]], court: CourtConfig) -> None:
+        self.cameras = cameras  # (camera index, session), index 0 first
+        self.court = court
+
+    def start(self) -> None:
+        for _, cam in self.cameras:
+            cam.start()
+
+    def stop(self) -> None:
+        # Signal every camera first so they all stop at (about) the same time.
+        for _, cam in self.cameras:
+            cam.request_stop()
+        for _, cam in self.cameras:
+            cam.stop()
+
+    def camera_snapshots(self) -> list[tuple[int, TrackingResult]]:
+        return [(index, cam.snapshot()) for index, cam in self.cameras]
+
+    def snapshot(self) -> TrackingResult:
+        fused, _ = fuse_cameras(
+            [
+                CameraTracking(index, cam.region, 0.0, result)
+                for (index, cam), (_, result) in zip(self.cameras, self.camera_snapshots())
+            ],
+            self.court,
+        )
+        return fused
+
+
 class LiveSessionRegistry:
     """Process-wide registry so API routes can find the running session for
     a given match id."""
@@ -165,11 +209,11 @@ class LiveSessionRegistry:
         self._sessions: dict[int, LiveSession] = {}
         self._lock = threading.Lock()
 
-    def add(self, match_id: int, session: LiveSession) -> None:
+    def add(self, match_id: int, session: LiveSession | MultiCameraLiveSession) -> None:
         with self._lock:
             self._sessions[match_id] = session
 
-    def get(self, match_id: int) -> LiveSession | None:
+    def get(self, match_id: int) -> LiveSession | MultiCameraLiveSession | None:
         with self._lock:
             return self._sessions.get(match_id)
 

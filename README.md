@@ -123,6 +123,10 @@ Abre http://localhost:5173.
    una captura de la cámara en directo); revísalas y arrastra las que no
    encajen, o haz clic en ellas a mano. Arriba/abajo son las bandas y
    izquierda/derecha las líneas de gol. Mejora mucho la precisión de distancias y velocidades.
+   ¿Varias cámaras (p. ej. una por mitad de pista)? Pulsa **Añadir una
+   segunda cámara**, indica qué zona graba cada una y calíbralas con las
+   esquinas de su zona. En vídeos subidos se sincronizan solas por el sonido;
+   el desfase se puede ajustar después desde la sesión.
 5. Espera a que el análisis termine (con barra de progreso) (o, en directo, observa las
    estadísticas en tiempo real y pulsa **Detener transmisión** cuando
    acabes).

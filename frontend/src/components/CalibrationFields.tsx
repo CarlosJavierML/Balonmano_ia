@@ -1,15 +1,36 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchStreamPreview, suggestCorners } from "../api/client";
-import type { PixelCorner } from "../types";
+import type { CourtRegion, PixelCorner } from "../types";
 
-// Top/bottom edges are the sidelines (long sides), left/right the goal lines,
-// matching the homography in backend/app/court.py (top edge = 40 m / 27 m).
-const CORNER_LABELS = [
-  "Esquina superior izquierda",
-  "Esquina superior derecha",
-  "Esquina inferior derecha",
-  "Esquina inferior izquierda",
-];
+// Top/bottom edges are the sidelines (long sides), left/right the goal lines
+// (or the center line for a half), matching the homography in
+// backend/app/court.py (region_world_corners).
+const CORNER_LABELS: Record<CourtRegion, string[]> = {
+  full: [
+    "Esquina superior izquierda",
+    "Esquina superior derecha",
+    "Esquina inferior derecha",
+    "Esquina inferior izquierda",
+  ],
+  left: [
+    "Esquina superior de la línea de gol izquierda",
+    "Extremo superior de la línea central",
+    "Extremo inferior de la línea central",
+    "Esquina inferior de la línea de gol izquierda",
+  ],
+  right: [
+    "Extremo superior de la línea central",
+    "Esquina superior de la línea de gol derecha",
+    "Esquina inferior de la línea de gol derecha",
+    "Extremo inferior de la línea central",
+  ],
+};
+
+const REGION_HINT: Record<CourtRegion, string> = {
+  full: "Los bordes de arriba y abajo son las bandas (lados largos); izquierda y derecha, las líneas de gol.",
+  left: "Esta cámara cubre la mitad izquierda: sus esquinas son las de la portería izquierda y los extremos de la línea central.",
+  right: "Esta cámara cubre la mitad derecha: sus esquinas son los extremos de la línea central y las de la portería derecha.",
+};
 const CORNER_SHORT = ["1", "2", "3", "4"];
 
 type Corners = (PixelCorner | null)[];
@@ -51,12 +72,15 @@ export default function CalibrationFields({
   onChange,
   videoFile,
   streamUrl,
+  region = "full",
 }: {
   /** Receives the 4 corners once they're all set, or undefined otherwise.
    * `incomplete` is true when calibration is enabled but not finished. */
   onChange: (corners: PixelCorner[] | undefined, incomplete: boolean) => void;
   videoFile?: File | null;
   streamUrl?: string;
+  /** Part of the court this camera films (multi-camera sessions). */
+  region?: CourtRegion;
 }) {
   const [enabled, setEnabled] = useState(false);
   const [corners, setCorners] = useState<Corners>(EMPTY);
@@ -196,6 +220,7 @@ export default function CalibrationFields({
     setAndEmit(corners.map((c, i) => (i === index ? { ...current, [axis]: value } : c)));
   }
 
+  const labels = CORNER_LABELS[region];
   const nextIndex = corners.findIndex((c) => c === null);
   const placed = corners.filter((c): c is PixelCorner => c !== null);
   const canLoadFrame = Boolean(videoFile || streamUrl);
@@ -213,8 +238,9 @@ export default function CalibrationFields({
         Calibrar cámara (recomendado para distancias/velocidades precisas)
       </label>
       <p className="helper-text">
-        Marca las 4 esquinas de la pista tal y como se ven desde tu cámara fija. Sin calibrar, la
-        app asume que la cámara encuadra la pista completa de borde a borde, lo que puede
+        Marca las 4 esquinas {region === "full" ? "de la pista" : "de la media pista que cubre"} tal
+        y como se ven desde tu cámara fija. Sin calibrar, la app asume que la cámara encuadra{" "}
+        {region === "full" ? "la pista completa" : "su mitad"} de borde a borde, lo que puede
         distorsionar las medidas en los laterales.
       </p>
 
@@ -257,8 +283,7 @@ export default function CalibrationFields({
               <p className="helper-text">
                 {nextIndex === -1
                   ? "Las 4 esquinas están marcadas. Puedes arrastrarlas para ajustarlas."
-                  : `Haz clic en: ${CORNER_LABELS[nextIndex].toLowerCase()} (${nextIndex + 1}/4). ` +
-                    "Los bordes de arriba y abajo son las bandas (lados largos); izquierda y derecha, las líneas de gol."}
+                  : `Haz clic en: ${labels[nextIndex].toLowerCase()} (${nextIndex + 1}/4). ${REGION_HINT[region]}`}
               </p>
               <div
                 ref={canvasRef}
@@ -320,7 +345,7 @@ export default function CalibrationFields({
           )}
 
           <div className="corner-grid" style={{ marginTop: 12 }}>
-            {CORNER_LABELS.map((label, i) => (
+            {labels.map((label, i) => (
               <div key={label}>
                 <label style={{ fontWeight: 400 }}>
                   {i + 1}. {label}

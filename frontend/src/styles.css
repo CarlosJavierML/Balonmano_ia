@@ -627,3 +627,53 @@ th {
   flex-wrap: wrap;
   margin-top: 12px;
 }
+
+.camera-single {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.camera-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px 16px;
+  margin: 0 0 18px;
+}
+
+.camera-card legend {
+  padding: 0 6px;
+  font-weight: 700;
+}
+
+.camera-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 560px) {
+  .camera-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.offset-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.offset-field input {
+  width: 110px;
+  flex: none;
+}
+
+.sync-method {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.sync-method.warn {
+  color: var(--warning);
+}

@@ -53,7 +53,10 @@ class Match(Base):
     # Manual team/role corrections per track id (see app.analysis.session.Overrides).
     overrides: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Saved raw trajectories, used to re-analyze after manual corrections.
+    # For multi-camera sessions these are the fused trajectories.
     tracking_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Multi-camera sessions: how the cameras were combined (see app.vision.fusion).
+    fusion_report: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -62,6 +65,11 @@ class Match(Base):
     )
     events: Mapped[list["Event"]] = relationship(back_populates="match", cascade="all, delete-orphan")
     jobs: Mapped[list["Job"]] = relationship(back_populates="match", cascade="all, delete-orphan")
+    # Empty for single-camera sessions, which keep using video_path/stream_url
+    # and calibration on the match itself.
+    cameras: Mapped[list["Camera"]] = relationship(
+        back_populates="match", cascade="all, delete-orphan", order_by="Camera.index"
+    )
 
     @property
     def editable(self) -> bool:
@@ -133,3 +141,28 @@ class Job(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     match: Mapped["Match"] = relationship(back_populates="jobs")
+
+
+class Camera(Base):
+    """One camera of a multi-camera session (one video file or live stream)."""
+
+    __tablename__ = "cameras"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
+    index: Mapped[int] = mapped_column(Integer)  # 0 = time reference
+    name: Mapped[str] = mapped_column(String(120), default="")
+    region: Mapped[str] = mapped_column(String(10), default="full")  # "full" | "left" | "right"
+    video_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    stream_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    calibration: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Seconds added to this camera's timestamps to get session time (camera
+    # 0's clock). None = detect automatically from the audio.
+    time_offset_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Result of the automatic sync: {"offset_s", "confidence", "method"}.
+    sync_info: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # This camera's own trajectories before fusion (re-fusing after a sync
+    # change doesn't need the vision models again).
+    tracking_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    match: Mapped["Match"] = relationship(back_populates="cameras")

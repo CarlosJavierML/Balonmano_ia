@@ -84,6 +84,9 @@ export interface MatchDetail extends Match {
   team_summary: TeamSummary | null;
   team_names: TeamNames | null;
   active_job: Job | null;
+  /** Empty for single-camera sessions. */
+  cameras: CameraInfo[];
+  fusion_report: FusionReport | null;
   /** Whether team/role corrections can be applied (trajectories saved). */
   editable: boolean;
   player_stats: PlayerStat[];
@@ -109,4 +112,47 @@ export interface PlayerUpdate {
   team?: TeamLabel | null;
   role?: PlayerRole;
   reset?: boolean;
+}
+
+export type CourtRegion = "full" | "left" | "right";
+
+export interface SyncInfo {
+  /** reference = camera 0; audio = detected; manual = typed by the user;
+   * clock = live streams sharing the server clock; none = could not sync. */
+  method: "reference" | "audio" | "manual" | "clock" | "none";
+  offset_s: number;
+  confidence?: number;
+  detected_offset_s?: number;
+  reason?: string;
+}
+
+export interface CameraInfo {
+  index: number;
+  name: string;
+  region: CourtRegion;
+  calibrated: boolean;
+  time_offset_s: number | null;
+  sync_info: SyncInfo | null;
+  source: "video" | "stream";
+}
+
+export interface FusionReport {
+  cameras: { index: number; region: CourtRegion; offset_s: number; tracks: number }[];
+  overlap_merges: number;
+  handoffs: number;
+  people: number;
+}
+
+/** One camera in the "new session" form. */
+export interface CameraSetup {
+  key: number;
+  name: string;
+  region: CourtRegion;
+  file: File | null;
+  streamUrl: string;
+  corners?: PixelCorner[];
+  calibrationIncomplete: boolean;
+  /** Uploads: detect the offset from the audio (else use offsetS). */
+  autoSync: boolean;
+  offsetS: number;
 }

@@ -19,7 +19,7 @@ async def download_report(match_id: int, session: AsyncSession = Depends(get_ses
     result = await session.execute(
         select(Match)
         .where(Match.id == match_id)
-        .options(selectinload(Match.player_stats), selectinload(Match.events))
+        .options(selectinload(Match.player_stats), selectinload(Match.events), selectinload(Match.cameras))
     )
     match = result.scalar_one_or_none()
     if match is None:

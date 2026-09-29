@@ -10,6 +10,9 @@ ultralytics==8.3.0
 supervision==0.24.0
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
+# Bundled ffmpeg binary, used to read camera audio for automatic multi-camera
+# sync (a system ffmpeg on PATH takes precedence).
+imageio-ffmpeg==0.6.0
 
 # Reports / charts
 matplotlib==3.9.2

@@ -128,6 +128,16 @@ def build_match_report(
             styles["Normal"],
         )
     )
+    if match.cameras:
+        region_labels = {"full": "pista completa", "left": "mitad izquierda", "right": "mitad derecha"}
+        cams = ", ".join(f"{c.name} ({region_labels.get(c.region, c.region)})" for c in match.cameras)
+        people = (match.fusion_report or {}).get("people")
+        story.append(
+            Paragraph(
+                f"Cámaras: {cams}." + (f" {people} personas identificadas tras unir las cámaras." if people else ""),
+                styles["Normal"],
+            )
+        )
     story.append(Spacer(1, 0.5 * cm))
 
     if match.team_summary:

@@ -9,12 +9,14 @@ import {
   renameTeams,
   reportUrl,
   stopLiveMatch,
+  updateCamera,
   updatePlayer,
 } from "../api/client";
 import { CourtBadge, StatusBadge } from "../components/Badges";
 import EventsTimeline from "../components/EventsTimeline";
 import PlayerStatsTable from "../components/PlayerStatsTable";
 import { DistanceChart, SpeedChart } from "../components/StatsCharts";
+import CamerasPanel from "../components/CamerasPanel";
 import TeamSummary from "../components/TeamSummary";
 import type { LiveStatsSnapshot, MatchDetail, MatchStatus, PlayerUpdate, TeamLabel } from "../types";
 
@@ -108,6 +110,17 @@ export default function SessionDetail() {
     try {
       setMatch(await updatePlayer(matchId, trackId, update));
       setActionError(null);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  }
+
+  async function handleUpdateCamera(index: number, update: { time_offset_s?: number; auto_sync?: boolean }) {
+    try {
+      setMatch(await updateCamera(matchId, index, update));
+      setActionError(null);
+      setPollKey((k) => k + 1); // a re-fusion was queued: follow it
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
       throw e;
@@ -316,6 +329,18 @@ export default function SessionDetail() {
       {actionError && (
         <div className="card">
           <p className="error-text">{actionError}</p>
+        </div>
+      )}
+
+      {match.cameras.length > 0 && (
+        <div className="card">
+          <h2>Cámaras</h2>
+          <CamerasPanel
+            cameras={match.cameras}
+            report={match.fusion_report}
+            canEdit={FINISHED.includes(match.status) && !match.active_job && match.editable}
+            onUpdate={handleUpdateCamera}
+          />
         </div>
       )}
 

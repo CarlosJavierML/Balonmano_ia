@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.models import Job, Match
+from app.models import Camera, Job, Match
 from app.schemas import JobOut, QueueItemOut
 from app.vision.live import live_registry
 from app.worker.queue import (
@@ -79,9 +79,17 @@ async def reanalyze(match_id: int, session: AsyncSession = Depends(get_session))
     if live_registry.get(match_id) is not None:
         raise HTTPException(status_code=409, detail="La transmisión en directo sigue activa")
 
-    if match.video_path and Path(match.video_path).exists():
+    cameras = (await session.execute(select(Camera).where(Camera.match_id == match_id))).scalars().all()
+    if cameras:
+        has_videos = all(c.video_path and Path(c.video_path).exists() for c in cameras)
+        has_tracking = all(c.tracking_path and Path(c.tracking_path).exists() for c in cameras)
+    else:
+        has_videos = bool(match.video_path and Path(match.video_path).exists())
+        has_tracking = tracking_path_for(match_id).exists()
+
+    if has_videos:
         kind = "video"
-    elif tracking_path_for(match_id).exists():
+    elif has_tracking:
         kind = "tracking"
     else:
         raise HTTPException(

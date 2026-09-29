@@ -8,9 +8,9 @@ from sqlalchemy.orm import selectinload
 from app.config import REPORTS_DIR
 from app.db import get_session
 from app.models import Match
-from app.schemas import JobOut, MatchDetailOut, MatchOut, PlayerUpdateIn, TeamNamesIn
+from app.schemas import CameraUpdateIn, JobOut, MatchDetailOut, MatchOut, PlayerUpdateIn, TeamNamesIn
 from app.vision.live import live_registry
-from app.worker.queue import active_job, queue_positions
+from app.worker.queue import JobAlreadyActiveError, active_job, enqueue, queue_positions
 from app.worker.tasks import TrackingUnavailableError, recompute_tactics
 
 router = APIRouter(prefix="/matches", tags=["matches"])
@@ -26,7 +26,7 @@ async def _load_match(session: AsyncSession, match_id: int) -> Match:
     result = await session.execute(
         select(Match)
         .where(Match.id == match_id)
-        .options(selectinload(Match.player_stats), selectinload(Match.events))
+        .options(selectinload(Match.player_stats), selectinload(Match.events), selectinload(Match.cameras))
         .execution_options(populate_existing=True)
     )
     match = result.scalar_one_or_none()
@@ -113,7 +113,12 @@ async def delete_match(match_id: int, session: AsyncSession = Depends(get_sessio
     result = await session.execute(
         select(Match)
         .where(Match.id == match_id)
-        .options(selectinload(Match.player_stats), selectinload(Match.events))
+        .options(
+            selectinload(Match.player_stats),
+            selectinload(Match.events),
+            selectinload(Match.cameras),
+            selectinload(Match.jobs),
+        )
     )
     match = result.scalar_one_or_none()
     if match is None:
@@ -125,6 +130,7 @@ async def delete_match(match_id: int, session: AsyncSession = Depends(get_sessio
         raise HTTPException(status_code=409, detail="Cancela el análisis en curso antes de eliminar la sesión")
 
     files = [match.video_path, match.tracking_path, str(REPORTS_DIR / f"match_{match_id}.pdf")]
+    files += [p for cam in match.cameras for p in (cam.video_path, cam.tracking_path)]
     files += [s.heatmap_path for s in match.player_stats]
 
     await session.delete(match)
@@ -133,3 +139,39 @@ async def delete_match(match_id: int, session: AsyncSession = Depends(get_sessio
     for path in files:
         if path:
             Path(path).unlink(missing_ok=True)
+
+
+@router.patch("/{match_id}/cameras/{camera_index}", response_model=MatchDetailOut)
+async def update_camera(
+    match_id: int, camera_index: int, payload: CameraUpdateIn, session: AsyncSession = Depends(get_session)
+):
+    """Renames a camera and/or fixes its time sync. A sync change re-fuses
+    the cameras from their saved trajectories (queued; no video re-analysis)."""
+    match = await _load_match(session, match_id)
+    camera = next((c for c in match.cameras if c.index == camera_index), None)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada en esta sesión")
+
+    if payload.name is not None:
+        camera.name = payload.name.strip() or f"Cámara {camera_index + 1}"
+
+    sync_changed = payload.auto_sync or "time_offset_s" in payload.model_fields_set
+    if sync_changed:
+        if camera_index == match.cameras[0].index:
+            raise HTTPException(status_code=400, detail="La primera cámara es la referencia de tiempo (desfase 0)")
+        if not all(c.tracking_path and Path(c.tracking_path).exists() for c in match.cameras):
+            raise HTTPException(
+                status_code=409, detail="Las cámaras aún no se han analizado; espera a que termine el análisis"
+            )
+        if payload.auto_sync:
+            camera.time_offset_s = None
+            camera.sync_info = None  # force a new audio detection
+        else:
+            camera.time_offset_s = payload.time_offset_s
+        try:
+            await enqueue(session, match, "tracking")
+        except JobAlreadyActiveError as exc:
+            raise HTTPException(status_code=409, detail="Esta sesión ya tiene un análisis en cola o en curso") from exc
+
+    await session.commit()
+    return await _detail(session, match_id)

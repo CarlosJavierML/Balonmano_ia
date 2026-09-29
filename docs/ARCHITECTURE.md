@@ -56,6 +56,24 @@ Vídeo subido / Stream RTSP
   worker corre dentro del servidor web; en Docker va en su propio
   contenedor (`python -m app.worker`).
 
+## Multi-cámara
+
+```
+vídeo cámara 1 ─► pipeline (región izq.) ─► trayectorias cam 1 ─┐
+vídeo cámara 2 ─► pipeline (región der.) ─► trayectorias cam 2 ─┤
+                                                                ▼
+                    desfase por cámara (audio / manual / reloj del directo)
+                                                                ▼
+             fusión: rejilla temporal común + unión en zona compartida
+                     + relevos entre cámaras ─► trayectorias de la sesión
+                                                                ▼
+                     mismo análisis que con una cámara (stats, equipos, eventos)
+```
+
+Las trayectorias de cada cámara se guardan por separado, así que cambiar la
+sincronización solo repite la fusión (trabajo `tracking`), no la visión.
+Las sesiones de una cámara no pasan por la fusión y funcionan igual que antes.
+
 ## Cola de análisis
 
 ```
@@ -90,6 +108,8 @@ subida de vídeo / fin de directo ──► jobs (status=queued)
 | `app/vision/live.py` | Usa el mismo `FrameProcessor` de forma incremental, en un hilo, para RTSP; captura de fotograma para calibrar |
 | `app/analysis/teams.py` | Color de camiseta por jugador → equipo A/B (o sin equipo) |
 | `app/analysis/roles.py` | Porteros (tiempo en el área + pases) y árbitros |
+| `app/vision/fusion.py` | Multi-cámara: une las trayectorias de varias cámaras en una sola sesión |
+| `app/vision/audio_sync.py` | Desfase entre cámaras a partir de su audio (ffmpeg + correlación) |
 | `app/vision/court_lines.py` | Sugerencia automática de las 4 esquinas a partir de las líneas |
 | `app/analysis/session.py` | Trayectorias (+ correcciones manuales) → análisis completo; lo usan el worker, el directo y las correcciones |
 | `app/analysis/physical.py` | Trayectorias → distancia/velocidad/sprints/zonas/heatmap |

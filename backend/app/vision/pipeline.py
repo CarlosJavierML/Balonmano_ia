@@ -19,7 +19,7 @@ import numpy as np
 from app.analysis.teams import MAX_SAMPLES_PER_TRACK, jersey_color_feature
 
 from app.config import settings
-from app.court import CourtCalibration, CourtConfig
+from app.court import CourtCalibration, CourtConfig, CourtRegion
 from app.vision.detector import Detector
 from app.vision.tracker import BallTracker, PlayerTracker
 
@@ -88,9 +88,12 @@ class TrackingResult:
         )
 
 
-def _fallback_calibration(court: CourtConfig, frame_width: int, frame_height: int) -> CourtCalibration:
+def _fallback_calibration(
+    court: CourtConfig, frame_width: int, frame_height: int, region: CourtRegion = CourtRegion.FULL
+) -> CourtCalibration:
     """Best-effort pixel->world mapping when no manual calibration was given:
-    assumes the fixed camera frames the whole court edge-to-edge. Good enough
+    assumes the fixed camera frames its region (by default the whole court)
+    edge-to-edge. Good enough
     for a quick first look; real sessions should calibrate the 4 corners for
     accurate distances/speeds (perspective distortion otherwise skews far-side
     measurements)."""
@@ -101,7 +104,7 @@ def _fallback_calibration(court: CourtConfig, frame_width: int, frame_height: in
         (frame_width, frame_height),
         (0, frame_height),
     ]
-    return CourtCalibration(court, corners)
+    return CourtCalibration(court, corners, region)
 
 
 class FrameProcessor:
@@ -150,6 +153,7 @@ class VideoAnalysisPipeline:
         court: CourtConfig,
         calibration: CourtCalibration | None = None,
         on_progress: Callable[[float], None] | None = None,
+        region: CourtRegion = CourtRegion.FULL,
     ) -> TrackingResult:
         """Analyzes a video file. ``on_progress`` (if given) is called from
         this thread after every analyzed frame with the fraction of the video
@@ -168,7 +172,7 @@ class VideoAnalysisPipeline:
         duration_s = total_frames / source_fps if source_fps else 0.0
 
         calibrated = calibration is not None
-        calib = calibration or _fallback_calibration(court, frame_width, frame_height)
+        calib = calibration or _fallback_calibration(court, frame_width, frame_height, region)
 
         frame_stride = max(1, round(source_fps / self.target_fps))
         effective_fps = source_fps / frame_stride

@@ -92,6 +92,34 @@ def get_court_config(court_type: CourtType) -> CourtConfig:
     return COURTS[court_type]
 
 
+class CourtRegion(str, Enum):
+    """Part of the court a camera is calibrated against. A camera that only
+    films half the court can't see the far corners of the full court, so it
+    is calibrated with the corners of *its* half instead (goal-line corners
+    plus the two ends of the center line)."""
+
+    FULL = "full"
+    LEFT = "left"
+    RIGHT = "right"
+
+
+def region_world_corners(court: CourtConfig, region: CourtRegion) -> list[tuple[float, float]]:
+    """World corners (meters) of a region, ordered top-left, top-right,
+    bottom-right, bottom-left like the pixel corners."""
+    half = court.length_m / 2
+    x0, x1 = {
+        CourtRegion.FULL: (0.0, court.length_m),
+        CourtRegion.LEFT: (0.0, half),
+        CourtRegion.RIGHT: (half, court.length_m),
+    }[CourtRegion(region)]
+    return [(x0, 0.0), (x1, 0.0), (x1, court.width_m), (x0, court.width_m)]
+
+
+def region_contains(court: CourtConfig, region: CourtRegion, x: float, margin_m: float = 0.0) -> bool:
+    corners = region_world_corners(court, region)
+    return corners[0][0] - margin_m <= x <= corners[1][0] + margin_m
+
+
 class CourtCalibration:
     """Pixel <-> world coordinate mapping for one fixed-camera setup.
 
@@ -100,24 +128,25 @@ class CourtCalibration:
     "bottom" are the two sidelines (the court's long edges, mapped to
     x = 0..length_m) and "left"/"right" the two goal lines -- i.e. the view
     from a camera placed along one sideline, the usual fixed setup.
+
+    With ``region`` LEFT/RIGHT the corners are those of that half: e.g. for
+    the left half, top-right/bottom-right are the ends of the center line.
     """
 
-    def __init__(self, court: CourtConfig, pixel_corners: list[tuple[float, float]]):
+    def __init__(
+        self,
+        court: CourtConfig,
+        pixel_corners: list[tuple[float, float]],
+        region: CourtRegion = CourtRegion.FULL,
+    ):
         if len(pixel_corners) != 4:
             raise ValueError("Exactly 4 reference corners are required for calibration")
         if cv2 is None:
             raise RuntimeError("opencv-python is required to compute homographies")
 
         self.court = court
-        world_corners = np.array(
-            [
-                [0.0, 0.0],
-                [court.length_m, 0.0],
-                [court.length_m, court.width_m],
-                [0.0, court.width_m],
-            ],
-            dtype=np.float32,
-        )
+        self.region = CourtRegion(region)
+        world_corners = np.array(region_world_corners(court, self.region), dtype=np.float32)
         src = np.array(pixel_corners, dtype=np.float32)
         self._homography, _ = cv2.findHomography(src, world_corners)
         if self._homography is None:

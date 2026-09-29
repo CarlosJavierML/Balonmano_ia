@@ -4,6 +4,7 @@ import type {
   LiveStatsSnapshot,
   Match,
   MatchDetail,
+  CameraSetup,
   PixelCorner,
   PlayerUpdate,
   TeamNames,
@@ -105,6 +106,67 @@ export async function uploadMatchVideo(params: {
     form.append("calibration", JSON.stringify({ corners: params.corners }));
   }
   return request<Match>("/matches/upload", { method: "POST", body: form });
+}
+
+function calibrationFor(cam: CameraSetup) {
+  return cam.corners ? { corners: cam.corners, region: cam.region } : null;
+}
+
+/** Uploads one video per camera of the same session. */
+export function uploadMultiCameraMatch(params: {
+  name: string;
+  courtType: string;
+  cameras: CameraSetup[];
+}): Promise<Match> {
+  const form = new FormData();
+  form.append("name", params.name);
+  form.append("court_type", params.courtType);
+  params.cameras.forEach((cam) => form.append("file", cam.file as File));
+  form.append(
+    "cameras",
+    JSON.stringify(
+      params.cameras.map((cam, i) => ({
+        name: cam.name,
+        region: cam.region,
+        calibration: calibrationFor(cam),
+        time_offset_s: i === 0 ? 0 : cam.autoSync ? null : cam.offsetS,
+      })),
+    ),
+  );
+  return request<Match>("/matches/upload", { method: "POST", body: form });
+}
+
+export function startMultiCameraLive(params: {
+  name: string;
+  courtType: string;
+  cameras: CameraSetup[];
+}): Promise<Match> {
+  return request<Match>("/matches/live/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: params.name,
+      court_type: params.courtType,
+      cameras: params.cameras.map((cam) => ({
+        stream_url: cam.streamUrl,
+        name: cam.name,
+        region: cam.region,
+        calibration: calibrationFor(cam),
+      })),
+    }),
+  });
+}
+
+export function updateCamera(
+  id: number,
+  index: number,
+  update: { name?: string; time_offset_s?: number; auto_sync?: boolean },
+): Promise<MatchDetail> {
+  return request<MatchDetail>(`/matches/${id}/cameras/${index}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
 }
 
 export function startLiveMatch(params: {
