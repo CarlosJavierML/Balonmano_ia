@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listMatches } from "../api/client";
+import AnalysisQueue from "../components/AnalysisQueue";
 import { CourtBadge, StatusBadge } from "../components/Badges";
 import type { Match } from "../types";
 
@@ -8,11 +9,13 @@ export default function Dashboard() {
   const [matches, setMatches] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadMatches = useCallback(() => {
     listMatches()
       .then(setMatches)
       .catch((e) => setError(String(e)));
   }, []);
+
+  useEffect(loadMatches, [loadMatches]);
 
   return (
     <div className="container">
@@ -27,6 +30,9 @@ export default function Dashboard() {
       </div>
 
       {error && <p className="error-text">{error}</p>}
+
+      {/* Refresh the session list when a job starts/finishes/is cancelled. */}
+      <AnalysisQueue onChange={loadMatches} />
 
       {matches === null && !error && <p className="helper-text">Cargando…</p>}
 

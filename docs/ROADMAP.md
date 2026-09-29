@@ -49,17 +49,17 @@ rechace del portero vs. gol). Cuando haya suficientes clips etiquetados:
 - El contrato de salida (`TacticalEvent`) ya está pensado para que este
   modelo sustituya a `detect_events()` sin tocar BD, API ni informes.
 
-## 4. Escalar el procesamiento en segundo plano
+## 4. Escalar el procesamiento en segundo plano — ✅ hecho
 
-`BackgroundTasks` de FastAPI es síncrono a nivel de proceso: si suben dos
-vídeos largos a la vez, se compite por CPU/GPU. Para varios equipos usando
-la app a la vez:
+Cola persistida en la base de datos (`app/worker/`) con worker separable
+del proceso web, límite de concurrencia, posición y progreso visibles,
+cancelación, reintentos y recuperación de trabajos huérfanos. En Docker el
+worker va en su propio contenedor. Ver "Cola de análisis" en
+ARCHITECTURE.md (y por qué no Celery + Redis).
 
-- Mover `process_uploaded_video` / `finalize_live_session` a Celery + Redis
-  (o RQ), con un worker dedicado (idealmente con GPU) separado del proceso
-  web.
-- Esto también permite reintentos automáticos y una cola visible del
-  estado de cada análisis.
+Siguiente paso si algún día hace falta: con varias máquinas worker en red,
+pasar a PostgreSQL (SQLite compartido solo funciona en la misma máquina) y
+guardar vídeos/trayectorias en un almacenamiento común (p. ej. S3/MinIO).
 
 ## 5. Calibración asistida — ✅ hecho
 

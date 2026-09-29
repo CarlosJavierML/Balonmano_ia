@@ -152,7 +152,8 @@ class VideoAnalysisPipeline:
         on_progress: Callable[[float], None] | None = None,
     ) -> TrackingResult:
         """Analyzes a video file. ``on_progress`` (if given) is called from
-        this thread with the fraction of the video processed, in [0, 1]."""
+        this thread after every analyzed frame with the fraction of the video
+        processed, in [0, 1]; an exception raised by it aborts the analysis."""
         if cv2 is None:
             raise RuntimeError("opencv-python is required to analyze video files")
 
@@ -192,8 +193,10 @@ class VideoAnalysisPipeline:
 
                 processor.process(frame, frame_idx / source_fps, result)
 
-                if on_progress is not None and total_frames > 0:
-                    on_progress(min(1.0, frame_idx / total_frames))
+                if on_progress is not None:
+                    # Called even when the frame count is unknown (value 0):
+                    # the callback is also how a cancellation interrupts us.
+                    on_progress(min(1.0, frame_idx / total_frames) if total_frames > 0 else 0.0)
                 frame_idx += 1
         finally:
             cap.release()

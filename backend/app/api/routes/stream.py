@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,8 @@ from app.db import get_session
 from app.models import Match
 from app.schemas import LiveStatsSnapshot, LiveStreamStart, MatchOut, PlayerStatOut
 from app.vision.live import LiveSession, grab_preview_frame, live_registry
-from app.worker.tasks import finalize_live_session
+from app.worker.queue import enqueue
+from app.worker.tasks import tracking_path_for
 
 router = APIRouter(prefix="/matches/live", tags=["live"])
 
@@ -67,24 +68,30 @@ async def start_live_match(payload: LiveStreamStart, session: AsyncSession = Dep
 
 
 @router.post("/{match_id}/stop", response_model=MatchOut)
-async def stop_live_match(
-    match_id: int, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)
-):
+async def stop_live_match(match_id: int, session: AsyncSession = Depends(get_session)):
     live_session = live_registry.get(match_id)
     if live_session is None:
         raise HTTPException(status_code=404, detail="No hay una transmisión activa con ese id")
-
-    # Stop first so the snapshot includes every frame processed up to the
-    # moment the capture thread exits.
-    live_session.stop()
-    result = live_session.snapshot()
-    live_registry.remove(match_id)
 
     match = await session.get(Match, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-    background_tasks.add_task(finalize_live_session, match_id, result)
+    # Stop first so the snapshot includes every frame processed up to the
+    # moment the capture thread exits.
+    await asyncio.to_thread(live_session.stop)
+    result = live_session.snapshot()
+    live_registry.remove(match_id)
+
+    # Save the trajectories and let the queue worker do the (quick) final
+    # analysis, so it's retried/visible like any other job.
+    tracking_path = tracking_path_for(match_id)
+    await asyncio.to_thread(result.save, tracking_path)
+    match.tracking_path = str(tracking_path)
+    match.duration_s = result.duration_s
+    await enqueue(session, match, "tracking")
+    await session.commit()
+    await session.refresh(match)
     return match
 
 

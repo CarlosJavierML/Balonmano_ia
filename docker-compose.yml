@@ -7,6 +7,23 @@ services:
       - backend_data:/app/data
     environment:
       - BALONMANO_CORS_ORIGINS=["http://localhost:5173","http://localhost:8080"]
+      # Analysis runs in the dedicated `worker` service below; the web
+      # server only serves the API and the live streams.
+      - BALONMANO_EMBEDDED_WORKER=false
+
+  # Takes analysis jobs from the queue (stored in the shared database) and
+  # runs them one after another. To use a GPU machine, run this service
+  # there (with a CUDA build of PyTorch) pointing at the same data/database.
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    volumes:
+      - backend_data:/app/data
+    environment:
+      - BALONMANO_WORKER_CONCURRENCY=1
+    restart: unless-stopped
+    depends_on:
+      - backend
 
   frontend:
     build:

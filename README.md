@@ -20,7 +20,7 @@ balonmano_ia/
 │       ├── analysis/     Estadísticas físicas + eventos tácticos (heurística)
 │       ├── reports/      Generación de informes PDF
 │       ├── api/routes/   Endpoints REST
-│       └── worker/       Procesamiento en segundo plano
+│       └── worker/       Cola de análisis y worker (`python -m app.worker`)
 ├── frontend/         React + Vite + TypeScript (dashboard)
 └── docs/             Arquitectura y hoja de ruta detalladas
 ```
@@ -64,6 +64,12 @@ docker compose up --build
 
 - Backend (API): http://localhost:8000 (docs interactivas en `/docs`)
 - Frontend (dashboard): http://localhost:8080
+- Worker de análisis: contenedor `worker`, que procesa la cola de vídeos de
+  uno en uno (`BALONMANO_WORKER_CONCURRENCY` para cambiarlo).
+
+Los vídeos subidos entran en una **cola de análisis** visible en el
+dashboard (posición, progreso, cancelar). Si el worker se reinicia a mitad
+de un análisis, el trabajo vuelve a la cola solo.
 
 ## Desarrollo local sin Docker
 
@@ -75,6 +81,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+```
+
+Así el servidor web lleva el worker de análisis integrado. Para analizar en
+otra máquina (p. ej. con GPU) o en un proceso aparte:
+
+```bash
+BALONMANO_EMBEDDED_WORKER=false uvicorn app.main:app   # solo API
+python -m app.worker                                   # worker (otra terminal/máquina)
 ```
 
 Requiere Python 3.10+. La primera vez que se analiza un vídeo, `ultralytics`

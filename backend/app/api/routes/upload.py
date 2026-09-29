@@ -1,7 +1,7 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import VIDEOS_DIR
@@ -9,7 +9,7 @@ from app.court import CourtType
 from app.db import get_session
 from app.models import Match
 from app.schemas import CalibrationIn, MatchOut
-from app.worker.tasks import process_uploaded_video
+from app.worker.queue import enqueue
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
@@ -18,7 +18,6 @@ ALLOWED_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv"}
 
 @router.post("/upload", response_model=MatchOut)
 async def upload_match_video(
-    background_tasks: BackgroundTasks,
     name: str = Form(...),
     court_type: str = Form(...),
     calibration: str | None = Form(None),
@@ -53,8 +52,8 @@ async def upload_match_video(
         calibration=calibration_data,
     )
     session.add(match)
+    await session.flush()
+    await enqueue(session, match, "video")
     await session.commit()
     await session.refresh(match)
-
-    background_tasks.add_task(process_uploaded_video, match.id)
     return match

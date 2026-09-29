@@ -64,7 +64,32 @@ class EventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class JobOut(BaseModel):
+    id: int
+    match_id: int
+    kind: str
+    status: str
+    attempts: int
+    max_attempts: int
+    cancel_requested: bool
+    error: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    # Filled in by the API for queued jobs (1 = next to run).
+    position: int | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QueueItemOut(JobOut):
+    match_name: str
+    progress: float
+
+
 class MatchDetailOut(MatchOut):
+    # The queued/running analysis job for this session, if any.
+    active_job: JobOut | None = None
     team_summary: dict[str, Any] | None = None
     team_names: dict[str, str] | None = None
     # Whether manual team/role corrections can be applied (trajectories saved).

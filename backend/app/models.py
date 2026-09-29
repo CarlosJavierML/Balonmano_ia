@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -38,7 +38,7 @@ class Match(Base):
     court_type: Mapped[str] = mapped_column(String(20))  # "piso" | "playa"
     source_mode: Mapped[str] = mapped_column(String(20))  # "upload" | "live"
     status: Mapped[str] = mapped_column(String(20), default="pending")
-    # pending -> processing -> done | failed
+    # pending (queued) -> processing -> done | failed | cancelled
     video_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     stream_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     calibration: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -61,6 +61,7 @@ class Match(Base):
         back_populates="match", cascade="all, delete-orphan"
     )
     events: Mapped[list["Event"]] = relationship(back_populates="match", cascade="all, delete-orphan")
+    jobs: Mapped[list["Job"]] = relationship(back_populates="match", cascade="all, delete-orphan")
 
     @property
     def editable(self) -> bool:
@@ -107,3 +108,28 @@ class Event(Base):
     meta: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     match: Mapped["Match"] = relationship(back_populates="events")
+
+
+class Job(Base):
+    """One unit of background work in the analysis queue (see app/worker)."""
+
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
+    # "video": run the vision pipeline on the uploaded file.
+    # "tracking": analyze already-saved trajectories (finished live session).
+    kind: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    # queued -> running -> done | failed | cancelled (running -> queued on retry)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=1)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    match: Mapped["Match"] = relationship(back_populates="jobs")

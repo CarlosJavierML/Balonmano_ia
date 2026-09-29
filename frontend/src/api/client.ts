@@ -1,4 +1,6 @@
 import type {
+  Job,
+  QueueItem,
   LiveStatsSnapshot,
   Match,
   MatchDetail,
@@ -67,6 +69,18 @@ export async function suggestCorners(image: Blob): Promise<PixelCorner[]> {
   const res = await fetch(`${API_URL}/calibration/suggest`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await errorMessage(res));
   return (await res.json()).corners as PixelCorner[];
+}
+
+export function listJobs(includeFinished = false): Promise<QueueItem[]> {
+  return request<QueueItem[]>(`/jobs${includeFinished ? "?include_finished=true" : ""}`);
+}
+
+export function cancelAnalysis(id: number): Promise<Job> {
+  return request<Job>(`/matches/${id}/cancel`, { method: "POST" });
+}
+
+export function reanalyzeMatch(id: number): Promise<Job> {
+  return request<Job>(`/matches/${id}/reanalyze`, { method: "POST" });
 }
 
 export function reportUrl(id: number): string {

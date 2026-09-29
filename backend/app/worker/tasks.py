@@ -1,20 +1,20 @@
-"""Background processing tasks.
+"""Analysis work executed by the queue worker (see `app.worker.runner`).
 
-Run via FastAPI's BackgroundTasks for this MVP (single-process, good enough
-for a club running a handful of analyses at a time). For heavier concurrent
-load, swap this module's entry points for Celery/RQ tasks behind a proper
-job queue -- see docs/ROADMAP.md.
+Everything here is plain async code over the database: the runner decides
+*when* a job runs (queue order, concurrency, retries, cancellation), these
+functions decide *what* running it means.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
-
+from collections.abc import Callable
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.analysis.session import SessionAnalysis, analyze_session
 from app.config import HEATMAPS_DIR, TRACKING_DIR
@@ -26,8 +26,6 @@ from app.vision.pipeline import TrackingResult, VideoAnalysisPipeline
 
 logger = logging.getLogger(__name__)
 
-PROGRESS_FLUSH_S = 2.0
-
 
 def _build_calibration(match: Match) -> CourtCalibration | None:
     if not match.calibration:
@@ -35,12 +33,6 @@ def _build_calibration(match: Match) -> CourtCalibration | None:
     court = get_court_config(CourtType(match.court_type))
     corners = [(c["x"], c["y"]) for c in match.calibration["corners"]]
     return CourtCalibration(court, corners)
-
-
-async def _stop_task(task: asyncio.Task) -> None:
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
 
 
 def _event_rows(match_id: int, analysis: SessionAnalysis) -> list[Event]:
@@ -63,7 +55,11 @@ class TrackingUnavailableError(Exception):
     """The session has no saved trajectories (analyzed by an older version)."""
 
 
-async def reanalyze_match(session: AsyncSession, match: Match) -> None:
+def tracking_path_for(match_id: int) -> Path:
+    return TRACKING_DIR / f"match_{match_id}.json.gz"
+
+
+async def recompute_tactics(session: AsyncSession, match: Match) -> None:
     """Recomputes teams, roles, events and team summary from the saved
     trajectories, applying the match's manual overrides. Physical stats
     don't depend on teams, so stat rows are updated in place (keeping any
@@ -82,14 +78,31 @@ async def reanalyze_match(session: AsyncSession, match: Match) -> None:
     match.team_summary = analysis.team_summary or None
 
 
-async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
+async def persist_analysis(match_id: int, result: TrackingResult, *, new_tracks: bool) -> None:
+    """Analyzes trajectories and stores stats/events for a match, replacing
+    any previous analysis. ``new_tracks`` means the vision pipeline ran
+    again: track ids changed, so earlier manual corrections no longer apply."""
     async with async_session_maker() as session:
-        match = await session.get(Match, match_id)
+        match = await session.scalar(
+            select(Match)
+            .where(Match.id == match_id)
+            .options(selectinload(Match.player_stats), selectinload(Match.events))
+        )
         if match is None:
             return
 
-        tracking_path = TRACKING_DIR / f"match_{match_id}.json.gz"
-        await asyncio.to_thread(result.save, tracking_path)
+        # Re-analysis: drop the previous results (and their heatmap images).
+        for stat in match.player_stats:
+            if stat.heatmap_path:
+                Path(stat.heatmap_path).unlink(missing_ok=True)
+        match.player_stats.clear()
+        match.events.clear()
+        if new_tracks:
+            match.overrides = None
+
+        tracking_path = tracking_path_for(match_id)
+        if new_tracks or not tracking_path.exists():
+            await asyncio.to_thread(result.save, tracking_path)
         match.tracking_path = str(tracking_path)
 
         court = get_court_config(CourtType(match.court_type))
@@ -102,7 +115,7 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
                 render_heatmap_image(stats.heatmap_grid, path, title=f"Jugador #{track_id}")
                 heatmap_path = str(path)
 
-            session.add(
+            match.player_stats.append(
                 PlayerMatchStat(
                     match_id=match_id,
                     track_id=track_id,
@@ -118,74 +131,48 @@ async def _persist_analysis(match_id: int, result: TrackingResult) -> None:
                 )
             )
 
-        session.add_all(_event_rows(match_id, analysis))
+        match.events.extend(_event_rows(match_id, analysis))
 
         match.duration_s = result.duration_s
         match.team_summary = analysis.team_summary or None
         match.progress = 1.0
         match.status = "done"
+        match.error_message = None
         await session.commit()
 
 
-async def process_uploaded_video(match_id: int) -> None:
+async def run_video_job(match_id: int, on_progress: Callable[[float], None]) -> None:
+    """Runs the vision pipeline on the match's uploaded video.
+
+    ``on_progress`` is called from the analysis thread; it may raise to
+    abort the analysis (that's how cancellation reaches the pipeline)."""
     async with async_session_maker() as session:
         match = await session.get(Match, match_id)
-        if match is None or match.video_path is None:
+        if match is None:
             return
-        match.status = "processing"
+        if not match.video_path or not Path(match.video_path).exists():
+            raise FileNotFoundError("El vídeo de esta sesión ya no existe en el servidor")
         video_path = match.video_path
         court = get_court_config(CourtType(match.court_type))
         calibration = _build_calibration(match)
-        await session.commit()
 
-    progress = {"value": 0.0}
-
-    def on_progress(value: float) -> None:
-        # Called from the analysis thread; a plain dict write is enough for
-        # the async flusher below to pick it up.
-        progress["value"] = value
-
-    async def flush_progress() -> None:
-        last_written = -1.0
-        while True:
-            await asyncio.sleep(PROGRESS_FLUSH_S)
-            value = round(progress["value"], 3)
-            if value == last_written:
-                continue
-            async with async_session_maker() as session:
-                match = await session.get(Match, match_id)
-                if match is not None and match.status == "processing":
-                    match.progress = value
-                    await session.commit()
-            last_written = value
-
-    flusher = asyncio.create_task(flush_progress())
-    try:
-        pipeline = VideoAnalysisPipeline()
-        result = await asyncio.to_thread(pipeline.analyze, video_path, court, calibration, on_progress)
-        await _stop_task(flusher)
-        await _persist_analysis(match_id, result)
-    except Exception as exc:  # noqa: BLE001 - surface any failure on the match record
-        logger.exception("Video analysis failed for match %s", match_id)
-        async with async_session_maker() as session:
-            match = await session.get(Match, match_id)
-            if match is not None:
-                match.status = "failed"
-                match.error_message = str(exc)
-                await session.commit()
-    finally:
-        await _stop_task(flusher)
+    pipeline = VideoAnalysisPipeline()
+    result = await asyncio.to_thread(pipeline.analyze, video_path, court, calibration, on_progress)
+    await persist_analysis(match_id, result, new_tracks=True)
 
 
-async def finalize_live_session(match_id: int, result: TrackingResult) -> None:
-    """Persists the accumulated stats/events once a live stream is stopped."""
-    try:
-        await _persist_analysis(match_id, result)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to finalize live session for match %s", match_id)
-        async with async_session_maker() as session:
-            match = await session.get(Match, match_id)
-            if match is not None:
-                match.status = "failed"
-                match.error_message = str(exc)
-                await session.commit()
+async def run_tracking_job(match_id: int, on_progress: Callable[[float], None]) -> None:
+    """Analyzes trajectories already saved to disk (e.g. a live session that
+    was just stopped) -- no vision models involved."""
+    path = tracking_path_for(match_id)
+    if not path.exists():
+        raise FileNotFoundError("No se encontraron las trayectorias guardadas de esta sesión")
+    result = await asyncio.to_thread(TrackingResult.load, path)
+    on_progress(0.5)
+    await persist_analysis(match_id, result, new_tracks=False)
+
+
+JOB_HANDLERS = {
+    "video": run_video_job,
+    "tracking": run_tracking_job,
+}

@@ -8,9 +8,10 @@ from sqlalchemy.orm import selectinload
 from app.config import REPORTS_DIR
 from app.db import get_session
 from app.models import Match
-from app.schemas import MatchDetailOut, MatchOut, PlayerUpdateIn, TeamNamesIn
+from app.schemas import JobOut, MatchDetailOut, MatchOut, PlayerUpdateIn, TeamNamesIn
 from app.vision.live import live_registry
-from app.worker.tasks import TrackingUnavailableError, reanalyze_match
+from app.worker.queue import active_job, queue_positions
+from app.worker.tasks import TrackingUnavailableError, recompute_tactics
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
@@ -34,9 +35,19 @@ async def _load_match(session: AsyncSession, match_id: int) -> Match:
     return match
 
 
+async def _detail(session: AsyncSession, match_id: int) -> MatchDetailOut:
+    match = await _load_match(session, match_id)
+    detail = MatchDetailOut.model_validate(match)
+    job = await active_job(session, match_id)
+    if job is not None:
+        positions = await queue_positions(session)
+        detail.active_job = JobOut.model_validate(job).model_copy(update={"position": positions.get(job.id)})
+    return detail
+
+
 @router.get("/{match_id}", response_model=MatchDetailOut)
 async def get_match(match_id: int, session: AsyncSession = Depends(get_session)):
-    return await _load_match(session, match_id)
+    return await _detail(session, match_id)
 
 
 @router.patch("/{match_id}/teams", response_model=MatchDetailOut)
@@ -51,7 +62,7 @@ async def rename_teams(match_id: int, payload: TeamNamesIn, session: AsyncSessio
             names.pop(team, None)  # empty name = back to "Equipo A/B"
     match.team_names = names or None
     await session.commit()
-    return await _load_match(session, match_id)
+    return await _detail(session, match_id)
 
 
 @router.patch("/{match_id}/players/{track_id}", response_model=MatchDetailOut)
@@ -89,12 +100,12 @@ async def update_player(
             overrides.pop(str(track_id), None)
         match.overrides = overrides or None
         try:
-            await reanalyze_match(session, match)
+            await recompute_tactics(session, match)
         except TrackingUnavailableError as exc:  # pragma: no cover - guarded by `editable`
             raise HTTPException(status_code=409, detail="Trayectorias no disponibles") from exc
 
     await session.commit()
-    return await _load_match(session, match_id)
+    return await _detail(session, match_id)
 
 
 @router.delete("/{match_id}", status_code=204)
@@ -109,6 +120,9 @@ async def delete_match(match_id: int, session: AsyncSession = Depends(get_sessio
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
     if live_registry.get(match_id) is not None:
         raise HTTPException(status_code=409, detail="Detén la transmisión en directo antes de eliminarla")
+    job = await active_job(session, match_id)
+    if job is not None and job.status == "running":
+        raise HTTPException(status_code=409, detail="Cancela el análisis en curso antes de eliminar la sesión")
 
     files = [match.video_path, match.tracking_path, str(REPORTS_DIR / f"match_{match_id}.pdf")]
     files += [s.heatmap_path for s in match.player_stats]

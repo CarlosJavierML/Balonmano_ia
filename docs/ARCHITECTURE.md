@@ -45,11 +45,39 @@ Vídeo subido / Stream RTSP
   diseñado para que un futuro modelo entrenado pueda sustituir a las reglas
   sin tocar el resto de la aplicación (BD, API, informes).
 - **FastAPI + SQLAlchemy async + SQLite**: ligero y suficiente para un
-  club/equipo. `docker-compose` lo levanta todo en dos contenedores. Migrar
-  a PostgreSQL es solo cambiar `DATABASE_URL`.
-- **Procesamiento en background con `BackgroundTasks`**: suficiente para
-  analizar unos pocos vídeos a la vez en un único proceso. Para más carga
-  concurrente, sustituir por Celery/RQ (ver ROADMAP).
+  club/equipo (en modo WAL, para que web y worker la compartan). Migrar a
+  PostgreSQL es solo cambiar `DATABASE_URL`.
+- **Cola de análisis en la propia base de datos** (tabla `jobs`) en vez de
+  Celery + Redis: da lo mismo que necesita un club (orden de llegada,
+  posición visible, progreso, cancelar, reintentos, recuperación si el
+  worker se cae, varios workers) sin añadir otro servicio que mantener. Un
+  worker reclama un trabajo con un `UPDATE ... WHERE status='queued'`
+  condicional, así que varios workers nunca cogen el mismo. Por defecto el
+  worker corre dentro del servidor web; en Docker va en su propio
+  contenedor (`python -m app.worker`).
+
+## Cola de análisis
+
+```
+subida de vídeo / fin de directo ──► jobs (status=queued)
+                                        │  worker: claim atómico (1 a la vez por defecto)
+                                        ▼
+                                  status=running ──► latido cada 5 s: progreso,
+                                        │            heartbeat_at, ¿cancelación?
+               ┌────────────────────────┼─────────────────────────┐
+               ▼                        ▼                         ▼
+             done           error → queued (reintento)       cancelled
+                            o failed si no quedan intentos
+```
+
+- Un trabajo `running` sin latido durante `job_stale_after_s` (worker caído
+  o reiniciado) vuelve a la cola, o pasa a `failed` si agotó los intentos.
+- Errores que no se arreglan reintentando (vídeo ilegible, fichero borrado)
+  no gastan reintentos.
+- La cancelación de un trabajo en curso llega al pipeline a través del
+  callback de progreso, que se llama tras cada fotograma analizado.
+- Tipos de trabajo: `video` (pipeline de visión sobre el vídeo subido) y
+  `tracking` (análisis de las trayectorias guardadas de un directo).
 
 ## Módulos clave del backend
 
@@ -67,5 +95,7 @@ Vídeo subido / Stream RTSP
 | `app/analysis/physical.py` | Trayectorias → distancia/velocidad/sprints/zonas/heatmap |
 | `app/analysis/tactical.py` | Trayectorias + equipos → eventos (pase, pérdida, tiro, gol) y resumen por equipo |
 | `app/reports/pdf_report.py` | Estadísticas + eventos → PDF |
-| `app/worker/tasks.py` | Pega todo lo anterior y persiste en BD |
+| `app/worker/queue.py` | Operaciones de la cola: encolar, reclamar, recuperar huérfanos, cancelar |
+| `app/worker/runner.py` | El worker: concurrencia, latidos/progreso, cancelación, reintentos |
+| `app/worker/tasks.py` | Qué hace cada tipo de trabajo; pega todo lo anterior y persiste en BD |
 | `app/db.py` | Sesiones de BD y una migración mínima que añade columnas nuevas a BDs existentes |

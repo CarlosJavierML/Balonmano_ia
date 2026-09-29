@@ -9,7 +9,7 @@ from app.db import _add_missing_columns, async_session_maker
 from app.main import app
 from app.models import Event, Match, PlayerMatchStat
 from app.vision.pipeline import BallFrame, TrackFrame, TrackingResult
-from app.worker.tasks import _persist_analysis
+from app.worker.tasks import persist_analysis
 
 
 def test_health_and_empty_match_list():
@@ -62,7 +62,7 @@ def test_persisted_analysis_exposes_teams_report_and_deletes_cleanly():
                 session.add(match)
                 await session.commit()
                 match_id = match.id
-            await _persist_analysis(match_id, _synthetic_result())
+            await persist_analysis(match_id, _synthetic_result(), new_tracks=True)
             return match_id
 
         match_id = client.portal.call(create_and_persist)
@@ -141,7 +141,7 @@ def _create_done_match(client) -> int:
             session.add(match)
             await session.commit()
             match_id = match.id
-        await _persist_analysis(match_id, _synthetic_result())
+        await persist_analysis(match_id, _synthetic_result(), new_tracks=True)
         return match_id
 
     return client.portal.call(create)
