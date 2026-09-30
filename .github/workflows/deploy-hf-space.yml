@@ -1,4 +1,5 @@
-# Deploys the app to a Hugging Face Space (free Docker hosting, 16 GB RAM).
+# Deploys the app to a Hugging Face Space (Docker Spaces need the HF PRO plan
+# since July 2026; the workflow is skipped until HF_SPACE is configured).
 #
 # One-time setup (see docs/DEPLOY.md):
 #   1. Create a Space at https://huggingface.co/new-space with SDK "Docker".
