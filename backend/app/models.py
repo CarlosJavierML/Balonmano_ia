@@ -55,6 +55,8 @@ class Match(Base):
     # Saved raw trajectories, used to re-analyze after manual corrections.
     # For multi-camera sessions these are the fused trajectories.
     tracking_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Rendered 2D recreation video: {"path", "speed", "created_at"}.
+    replay_video: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Multi-camera sessions: how the cameras were combined (see app.vision.fusion).
     fusion_report: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
@@ -133,7 +135,10 @@ class Job(Base):
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
     # "video": run the vision pipeline on the uploaded file.
     # "tracking": analyze already-saved trajectories (finished live session).
+    # "replay_video": render the 2D recreation video (doesn't change the match status).
     kind: Mapped[str] = mapped_column(String(20))
+    params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     # queued -> running -> done | failed | cancelled (running -> queued on retry)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

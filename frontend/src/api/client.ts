@@ -7,6 +7,7 @@ import type {
   CameraSetup,
   PixelCorner,
   PlayerUpdate,
+  ReplayData,
   TeamNames,
 } from "../types";
 
@@ -82,6 +83,22 @@ export function cancelAnalysis(id: number): Promise<Job> {
 
 export function reanalyzeMatch(id: number): Promise<Job> {
   return request<Job>(`/matches/${id}/reanalyze`, { method: "POST" });
+}
+
+export function getReplay(id: number): Promise<ReplayData> {
+  return request<ReplayData>(`/matches/${id}/replay`);
+}
+
+export function renderReplayVideo(id: number, speed: 1 | 2 | 4): Promise<Job> {
+  return request<Job>(`/matches/${id}/replay-video`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ speed }),
+  });
+}
+
+export function replayVideoUrl(id: number, version: string): string {
+  return `${API_URL}/matches/${id}/replay-video?v=${encodeURIComponent(version)}`;
 }
 
 export function reportUrl(id: number): string {

@@ -18,6 +18,14 @@ from app.config import settings
 from app.models import Job, Match
 
 ACTIVE_STATUSES = ("queued", "running")
+# Jobs that (re)compute the analysis and so drive the match status
+# (pending -> processing -> done/failed). Other jobs, like rendering the
+# recreation video, work on a finished analysis and leave the status alone.
+ANALYSIS_KINDS = frozenset({"video", "tracking"})
+
+
+def drives_match_status(kind: str) -> bool:
+    return kind in ANALYSIS_KINDS
 
 
 class JobAlreadyActiveError(Exception):
@@ -31,15 +39,18 @@ async def active_job(session: AsyncSession, match_id: int) -> Job | None:
     return result.scalars().first()
 
 
-async def enqueue(session: AsyncSession, match: Match, kind: str) -> Job:
-    """Queues analysis for a match (caller commits)."""
+async def enqueue(session: AsyncSession, match: Match, kind: str, params: dict | None = None) -> Job:
+    """Queues work for a match (caller commits)."""
     if await active_job(session, match.id) is not None:
         raise JobAlreadyActiveError
-    job = Job(match_id=match.id, kind=kind, status="queued", max_attempts=settings.job_max_attempts)
+    job = Job(
+        match_id=match.id, kind=kind, params=params, status="queued", max_attempts=settings.job_max_attempts
+    )
     session.add(job)
-    match.status = "pending"
-    match.progress = 0.0
-    match.error_message = None
+    if drives_match_status(kind):
+        match.status = "pending"
+        match.progress = 0.0
+        match.error_message = None
     return job
 
 
@@ -78,7 +89,7 @@ async def requeue_stale_jobs(session: AsyncSession) -> int:
     )
     stale = result.scalars().all()
     for job in stale:
-        match = await session.get(Match, job.match_id)
+        match = await session.get(Match, job.match_id) if drives_match_status(job.kind) else None
         if job.cancel_requested:
             job.status = "cancelled"
             job.finished_at = datetime.utcnow()

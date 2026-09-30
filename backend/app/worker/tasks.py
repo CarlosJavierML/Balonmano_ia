@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,11 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.analysis.session import SessionAnalysis, analyze_session
-from app.config import HEATMAPS_DIR, TRACKING_DIR
+from app.analysis.replay import build_replay
+from app.config import HEATMAPS_DIR, REPLAYS_DIR, TRACKING_DIR
 from app.court import CourtCalibration, CourtConfig, CourtRegion, CourtType, get_court_config
 from app.db import async_session_maker
 from app.models import Camera, Event, Match, PlayerMatchStat
 from app.reports.pdf_report import render_heatmap_image
+from app.reports.replay_video import render_replay_video
 from app.vision.audio_sync import estimate_offset, extract_envelope
 from app.vision.fusion import CameraTracking, fuse_cameras
 from app.vision.pipeline import TrackingResult, VideoAnalysisPipeline
@@ -97,7 +100,10 @@ async def persist_analysis(
         if match is None:
             return
 
-        # Re-analysis: drop the previous results (and their heatmap images).
+        # Re-analysis: drop the previous results (heatmaps, recreation video).
+        if match.replay_video:
+            Path(match.replay_video["path"]).unlink(missing_ok=True)
+            match.replay_video = None
         for stat in match.player_stats:
             if stat.heatmap_path:
                 Path(stat.heatmap_path).unlink(missing_ok=True)
@@ -158,7 +164,7 @@ async def _load_cameras(match_id: int) -> tuple[Match, list[Camera]] | None:
         return match, list(match.cameras)
 
 
-async def run_video_job(match_id: int, on_progress: Callable[[float], None]) -> None:
+async def run_video_job(match_id: int, on_progress: Callable[[float], None], params: dict | None = None) -> None:
     """Runs the vision pipeline on the match's uploaded video(s).
 
     ``on_progress`` is called from the analysis thread; it may raise to
@@ -285,7 +291,7 @@ async def fuse_and_persist(match_id: int) -> None:
     await persist_analysis(match_id, fused, new_tracks=True, fusion_report=report.as_dict())
 
 
-async def run_tracking_job(match_id: int, on_progress: Callable[[float], None]) -> None:
+async def run_tracking_job(match_id: int, on_progress: Callable[[float], None], params: dict | None = None) -> None:
     """Analyzes trajectories already saved to disk -- a live session that was
     just stopped, a re-analysis without the video, or a multi-camera re-sync.
     No vision models involved."""
@@ -305,7 +311,46 @@ async def run_tracking_job(match_id: int, on_progress: Callable[[float], None]) 
     await persist_analysis(match_id, result, new_tracks=False)
 
 
+async def load_replay(match_id: int) -> dict:
+    """Recreation data of an analyzed match (see app.analysis.replay)."""
+    async with async_session_maker() as session:
+        match = await session.scalar(
+            select(Match)
+            .where(Match.id == match_id)
+            .options(selectinload(Match.player_stats), selectinload(Match.events))
+        )
+        if match is None:
+            raise FileNotFoundError("Sesión no encontrada")
+        if not match.tracking_path or not Path(match.tracking_path).exists():
+            raise TrackingUnavailableError
+        tracking = await asyncio.to_thread(TrackingResult.load, Path(match.tracking_path))
+        return build_replay(match, tracking, get_court_config(CourtType(match.court_type)))
+
+
+REPLAY_SPEEDS = (1, 2, 4)
+
+
+async def run_replay_video_job(match_id: int, on_progress: Callable[[float], None], params: dict | None = None) -> None:
+    """Renders the 2D recreation of the session as an MP4 video."""
+    speed = (params or {}).get("speed", 1)
+    replay = await load_replay(match_id)
+    path = REPLAYS_DIR / f"match_{match_id}.mp4"
+    await asyncio.to_thread(render_replay_video, replay, path, float(speed), on_progress)
+    async with async_session_maker() as session:
+        match = await session.get(Match, match_id)
+        if match is None:
+            path.unlink(missing_ok=True)
+            return
+        match.replay_video = {
+            "path": str(path),
+            "speed": speed,
+            "created_at": datetime.utcnow().isoformat(timespec="seconds"),
+        }
+        await session.commit()
+
+
 JOB_HANDLERS = {
     "video": run_video_job,
     "tracking": run_tracking_job,
+    "replay_video": run_replay_video_job,
 }

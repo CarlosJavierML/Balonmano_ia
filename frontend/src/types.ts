@@ -6,9 +6,11 @@ export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 export interface Job {
   id: number;
   match_id: number;
-  /** "video": vision analysis of an upload; "tracking": saved trajectories (live). */
-  kind: "video" | "tracking";
+  /** "video": vision analysis of an upload; "tracking": saved trajectories (live);
+   * "replay_video": rendering the recreation video. */
+  kind: "video" | "tracking" | "replay_video";
   status: JobStatus;
+  progress: number;
   attempts: number;
   max_attempts: number;
   cancel_requested: boolean;
@@ -22,7 +24,6 @@ export interface Job {
 
 export interface QueueItem extends Job {
   match_name: string;
-  progress: number;
 }
 
 export interface Match {
@@ -89,6 +90,8 @@ export interface MatchDetail extends Match {
   /** Empty for single-camera sessions. */
   cameras: CameraInfo[];
   fusion_report: FusionReport | null;
+  /** Rendered recreation video, if any. */
+  replay_video: { speed: number; created_at: string } | null;
   /** Whether team/role corrections can be applied (trajectories saved). */
   editable: boolean;
   player_stats: PlayerStat[];
@@ -162,4 +165,40 @@ export interface CameraSetup {
   /** Uploads: detect the offset from the audio (else use offsetS). */
   autoSync: boolean;
   offsetS: number;
+}
+
+/** Animated 2D recreation of a session (GET /matches/{id}/replay). */
+export interface ReplayData {
+  match_id: number;
+  name: string;
+  duration_s: number;
+  fps: number;
+  court: {
+    type: CourtType;
+    length_m: number;
+    width_m: number;
+    goal_width_m: number;
+    goal_area_radius_m: number;
+    free_throw_radius_m: number | null;
+  };
+  teams: Partial<Record<TeamLabel, { name: string; color: string }>>;
+  players: {
+    track_id: number;
+    label: string;
+    team: TeamLabel | null;
+    role: PlayerRole | null;
+    color: string;
+    /** [t seconds, x meters, y meters] */
+    points: [number, number, number][];
+  }[];
+  ball: [number, number, number][];
+  events: {
+    type: EventType;
+    t: number;
+    from: number | null;
+    to: number | null;
+    x: number | null;
+    y: number | null;
+    team: TeamLabel | null;
+  }[];
 }

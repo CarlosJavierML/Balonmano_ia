@@ -27,7 +27,7 @@ from datetime import datetime
 from app.config import settings
 from app.db import async_session_maker
 from app.models import Job, Match
-from app.worker.queue import claim_next_job, requeue_stale_jobs
+from app.worker.queue import claim_next_job, drives_match_status, requeue_stale_jobs
 from app.worker.tasks import JOB_HANDLERS
 
 logger = logging.getLogger(__name__)
@@ -106,9 +106,10 @@ class Worker:
             if job.cancel_requested or match is None:
                 await self._finish(job_id, "cancelled")
                 return
-            kind, match_id = job.kind, job.match_id
-            match.status = "processing"
-            match.progress = 0.0
+            kind, match_id, params = job.kind, job.match_id, job.params or {}
+            if drives_match_status(kind):
+                match.status = "processing"
+                match.progress = 0.0
             await session.commit()
 
         progress = {"value": 0.0}
@@ -122,7 +123,7 @@ class Worker:
 
         heartbeat = asyncio.create_task(self._heartbeat(job_id, match_id, progress, cancel))
         try:
-            await JOB_HANDLERS[kind](match_id, on_progress)
+            await JOB_HANDLERS[kind](match_id, on_progress, params)
         except JobCancelledError:
             await self._finish(job_id, "cancelled")
         except asyncio.CancelledError:
@@ -152,7 +153,8 @@ class Worker:
                     if job.cancel_requested:
                         cancel.set()
                     job.heartbeat_at = datetime.utcnow()
-                    if match.status == "processing":
+                    job.progress = round(progress["value"], 3)
+                    if drives_match_status(job.kind) and match.status == "processing":
                         match.progress = round(progress["value"], 3)
                     await session.commit()
             except Exception:  # noqa: BLE001 - keep beating through transient DB errors
@@ -165,7 +167,9 @@ class Worker:
                 return
             job.status = status
             job.finished_at = datetime.utcnow()
-            match = await session.get(Match, job.match_id)
+            if status == "done":
+                job.progress = 1.0
+            match = await session.get(Match, job.match_id) if drives_match_status(job.kind) else None
             if match is not None and status == "cancelled":
                 match.status = "cancelled"
             await session.commit()
@@ -178,7 +182,7 @@ class Worker:
             job.status = "queued"
             job.worker_id = None
             job.attempts = max(0, job.attempts - 1)  # an interrupted run doesn't count
-            match = await session.get(Match, job.match_id)
+            match = await session.get(Match, job.match_id) if drives_match_status(job.kind) else None
             if match is not None:
                 match.status = "pending"
             await session.commit()
@@ -188,7 +192,7 @@ class Worker:
             job = await session.get(Job, job_id)
             if job is None:
                 return
-            match = await session.get(Match, job.match_id)
+            match = await session.get(Match, job.match_id) if drives_match_status(job.kind) else None
             message = str(exc) or exc.__class__.__name__
             job.error = message[:1000]
             retry = not isinstance(exc, NON_RETRYABLE) and job.attempts < job.max_attempts

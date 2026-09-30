@@ -130,6 +130,8 @@ async def delete_match(match_id: int, session: AsyncSession = Depends(get_sessio
         raise HTTPException(status_code=409, detail="Cancela el análisis en curso antes de eliminar la sesión")
 
     files = [match.video_path, match.tracking_path, str(REPORTS_DIR / f"match_{match_id}.pdf")]
+    if match.replay_video:
+        files.append(match.replay_video.get("path"))
     files += [p for cam in match.cameras for p in (cam.video_path, cam.tracking_path)]
     files += [s.heatmap_path for s in match.player_stats]
 
