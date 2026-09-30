@@ -9,6 +9,8 @@ asyncio -- FastAPI's event loop stays free to serve snapshot requests.
 
 from __future__ import annotations
 
+import contextlib
+import queue
 import threading
 import time
 from dataclasses import dataclass, field
@@ -33,6 +35,9 @@ class LiveState:
     started_at: float
     connected: bool = True
     error: str | None = None
+    frames_processed: int = 0
+    # False while the detection model is still loading.
+    ready: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -62,6 +67,10 @@ class LiveSession:
         )
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        # Analysis state, owned by the capture thread.
+        self._detector: Detector | None = None
+        self._processor: FrameProcessor | None = None
+        self._color_samples: dict[int, list[np.ndarray]] = {}
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -101,11 +110,7 @@ class LiveSession:
             self.state.connected = False
             return
 
-        detector = Detector()
-        processor: FrameProcessor | None = None
-        # Owned by this thread; copied into the shared state under the lock.
-        color_samples: dict[int, list[np.ndarray]] = {}
-
+        self._prepare()
         min_frame_interval = 1.0 / self.target_fps
         next_due = 0.0
         start = self.state.started_at
@@ -123,26 +128,97 @@ class LiveSession:
                 if now < next_due:
                     continue
                 next_due = now + min_frame_interval
-
-                if processor is None:
-                    calib = self.calibration
-                    if calib is None:
-                        h, w = frame.shape[:2]
-                        calib = _fallback_calibration(self.court, w, h, self.region)
-                    processor = FrameProcessor(detector, calib)
-
-                # Detection runs outside the lock (it's the slow part); only
-                # appending to the shared result is done while holding it.
-                frame_result = TrackingResult(fps=self.target_fps, duration_s=0.0, calibrated=True)
-                frame_result.color_samples = color_samples
-                processor.process(frame, now, frame_result)
-                with self.state.lock:
-                    self.state.result.player_frames.extend(frame_result.player_frames)
-                    self.state.result.ball_frames.extend(frame_result.ball_frames)
-                    for f in frame_result.player_frames:
-                        self.state.result.color_samples[f.track_id] = list(color_samples.get(f.track_id, []))
+                self._analyze(frame, now)
         finally:
             cap.release()
+            self.state.connected = False
+
+    def _prepare(self) -> None:
+        """Loads the detection model before the first frame arrives."""
+        self._detector = Detector()
+        warm_up = getattr(self._detector, "warm_up", None)
+        if warm_up is not None:
+            warm_up()
+        self.state.ready = True
+
+    def _analyze(self, frame: np.ndarray, t: float) -> None:
+        """Detection + tracking on one frame (called from the capture thread)."""
+        if self._detector is None:
+            self._prepare()
+        if self._processor is None:
+            calib = self.calibration
+            if calib is None:
+                h, w = frame.shape[:2]
+                calib = _fallback_calibration(self.court, w, h, self.region)
+            self._processor = FrameProcessor(self._detector, calib)
+
+        # Detection runs outside the lock (it's the slow part); only
+        # appending to the shared result is done while holding it.
+        frame_result = TrackingResult(fps=self.target_fps, duration_s=0.0, calibrated=True)
+        frame_result.color_samples = self._color_samples
+        self._processor.process(frame, t, frame_result)
+        with self.state.lock:
+            self.state.result.player_frames.extend(frame_result.player_frames)
+            self.state.result.ball_frames.extend(frame_result.ball_frames)
+            for f in frame_result.player_frames:
+                self.state.result.color_samples[f.track_id] = list(self._color_samples.get(f.track_id, []))
+            self.state.frames_processed += 1
+
+
+class BrowserLiveSession(LiveSession):
+    """Live session fed by a web browser (e.g. the coach's phone camera)
+    instead of an RTSP URL: the page captures frames with getUserMedia and
+    POSTs them as JPEG, each with its capture time in seconds since the
+    session started. Frames are analyzed in a background thread. `push`
+    returns an event set once the frame is done, so the page can wait for
+    it before sending the next one: the frame rate then adapts to how fast
+    the server analyzes (GPU vs CPU) and the network. If frames still pile
+    up, the oldest waiting ones are dropped so the analysis never falls
+    behind real time."""
+
+    SOURCE = "browser"
+    MAX_WAITING_FRAMES = 2
+
+    def __init__(self, court: CourtConfig, calibration: CourtCalibration | None, **kwargs) -> None:
+        super().__init__(self.SOURCE, court, calibration, **kwargs)
+        self._frames: queue.Queue[tuple[bytes, float, threading.Event]] = queue.Queue(
+            maxsize=self.MAX_WAITING_FRAMES
+        )
+        self._last_t = -1.0
+
+    def push(self, jpeg: bytes, t: float | None) -> threading.Event:
+        if t is None:  # no capture time from the client: use arrival time
+            t = time.time() - self.state.started_at
+        done = threading.Event()
+        while True:
+            try:
+                self._frames.put_nowait((jpeg, t, done))
+                return done
+            except queue.Full:
+                with contextlib.suppress(queue.Empty):
+                    self._frames.get_nowait()[2].set()  # dropped: release its sender
+
+    def _run(self) -> None:
+        try:
+            self._prepare()  # frames sent meanwhile wait (or are dropped)
+            while not self._stop_event.is_set():
+                try:
+                    jpeg, t, done = self._frames.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                try:
+                    if t <= self._last_t:
+                        continue  # out of order (network reordering): skip
+                    frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if frame is None:
+                        continue
+                    self._last_t = t
+                    self._analyze(frame, t)
+                finally:
+                    done.set()
+        except Exception as exc:  # noqa: BLE001 - keep the error visible in the snapshot
+            self.state.error = str(exc)
+        finally:
             self.state.connected = False
 
 

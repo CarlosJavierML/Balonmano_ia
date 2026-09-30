@@ -33,6 +33,8 @@ export interface Match {
   status: MatchStatus;
   duration_s: number | null;
   progress: number;
+  /** Live sessions: IP camera URL or this device's camera. */
+  live_source: "rtsp" | "browser" | null;
   error_message: string | null;
   created_at: string;
 }
@@ -100,6 +102,11 @@ export interface LiveStatsSnapshot {
   recent_events: MatchEvent[];
   player_stats: PlayerStat[];
   team_summary: TeamSummary | null;
+  frames_processed: number;
+  /** False while the AI model is still loading at the start of the session. */
+  ai_ready: boolean;
+  source_connected: boolean;
+  source_error: string | null;
 }
 
 export interface PixelCorner {

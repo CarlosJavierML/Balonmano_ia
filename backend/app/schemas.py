@@ -33,6 +33,8 @@ class MatchOut(BaseModel):
     status: str
     duration_s: float | None
     progress: float = 0.0
+    # Live sessions: "rtsp" (IP camera URL) or "browser" (device camera).
+    live_source: str | None = None
     error_message: str | None
     created_at: datetime
 
@@ -157,6 +159,9 @@ class LiveStreamStart(BaseModel):
     name: str
     court_type: str
     # Single camera: stream_url (+ calibration). Several cameras: `cameras`.
+    # source="browser": frames are sent by the web page itself (the phone or
+    # laptop camera, via POST /matches/live/{id}/frame) instead of a URL.
+    source: Literal["rtsp", "browser"] = "rtsp"
     stream_url: str | None = None
     calibration: CalibrationIn | None = None
     cameras: list[LiveCameraIn] | None = Field(default=None, max_length=4)
@@ -169,6 +174,11 @@ class LiveStatsSnapshot(BaseModel):
     recent_events: list[EventOut]
     player_stats: list[PlayerStatOut]
     team_summary: dict[str, Any] | None = None
+    # Health of the video source, so the page can tell "no image arriving".
+    frames_processed: int = 0
+    ai_ready: bool = True
+    source_connected: bool = True
+    source_error: str | None = None
 
 
 class TeamNamesIn(BaseModel):

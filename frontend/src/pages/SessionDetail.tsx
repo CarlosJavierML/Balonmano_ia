@@ -16,7 +16,9 @@ import { CourtBadge, StatusBadge } from "../components/Badges";
 import EventsTimeline from "../components/EventsTimeline";
 import PlayerStatsTable from "../components/PlayerStatsTable";
 import { DistanceChart, SpeedChart } from "../components/StatsCharts";
+import { closeCamera, getStatus, stopSending } from "../camera/browserCamera";
 import CamerasPanel from "../components/CamerasPanel";
+import LiveSourcePanel from "../components/LiveSourcePanel";
 import TeamSummary from "../components/TeamSummary";
 import type { LiveStatsSnapshot, MatchDetail, MatchStatus, PlayerUpdate, TeamLabel } from "../types";
 
@@ -88,9 +90,14 @@ export default function SessionDetail() {
   async function handleStop() {
     setStopping(true);
     try {
+      // This device was sending its camera: stop that first, then the session.
+      if (getStatus().matchId === matchId) {
+        stopSending();
+        closeCamera();
+      }
       await stopLiveMatch(matchId);
     } catch (e) {
-      setError(String(e));
+      setActionError(e instanceof Error ? e.message : String(e));
     } finally {
       setStopping(false);
     }
@@ -229,6 +236,7 @@ export default function SessionDetail() {
             <span className="pulse-dot" />
             En directo
           </h2>
+          <LiveSourcePanel match={match} snapshot={liveSnapshot} />
           <div className="grid grid-3">
             <div className="stat-tile">
               <div className="value">{formatDuration(liveSnapshot.elapsed_s)}</div>

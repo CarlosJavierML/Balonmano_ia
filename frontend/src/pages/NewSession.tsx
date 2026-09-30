@@ -1,15 +1,28 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  startBrowserLiveMatch,
   startLiveMatch,
   startMultiCameraLive,
   uploadMatchVideo,
   uploadMultiCameraMatch,
 } from "../api/client";
+import {
+  cameraSupported,
+  captureFrame,
+  closeCamera,
+  currentStream,
+  getStatus,
+  openCamera,
+  startSending,
+} from "../camera/browserCamera";
 import CalibrationFields from "../components/CalibrationFields";
+import DeviceCameraPreview from "../components/DeviceCameraPreview";
 import type { CameraSetup, CourtRegion, CourtType } from "../types";
 
 type Mode = "upload" | "live";
+/** Live source: this device's camera, or IP cameras by RTSP URL. */
+type LiveSource = "device" | "rtsp";
 
 const MAX_CAMERAS = 4;
 
@@ -39,11 +52,44 @@ export default function NewSession() {
   const [name, setName] = useState("");
   const [courtType, setCourtType] = useState<CourtType>("piso");
   const [cameras, setCameras] = useState<CameraSetup[]>([newCamera(0)]);
+  const [liveSource, setLiveSource] = useState<LiveSource>(cameraSupported() ? "device" : "rtsp");
+  const [deviceStream, setDeviceStream] = useState<MediaStream | null>(currentStream());
+  const [openingCamera, setOpeningCamera] = useState(false);
+  const deviceCamera = mode === "live" && liveSource === "device";
+
+  // Leaving the form without starting a session: release the camera (unless
+  // it's already feeding a live session).
+  useEffect(
+    () => () => {
+      if (!getStatus().sending) closeCamera();
+    },
+    [],
+  );
+
+  async function handleOpenCamera() {
+    setError(null);
+    setOpeningCamera(true);
+    try {
+      setDeviceStream(await openCamera());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOpeningCamera(false);
+    }
+  }
+
+  function chooseLiveSource(source: LiveSource) {
+    setLiveSource(source);
+    if (source === "device") {
+      // One device camera per session: keep only the first camera's settings.
+      setCameras((cams) => [{ ...cams[0], region: "full" }]);
+    }
+  }
   const nextKey = useRef(1);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const multi = cameras.length > 1;
+  const multi = cameras.length > 1 && !deviceCamera;
 
   function updateCamera(key: number, patch: Partial<CameraSetup>) {
     setCameras((cams) => cams.map((c) => (c.key === key ? { ...c, ...patch } : c)));
@@ -86,6 +132,11 @@ export default function NewSession() {
         matchId = multi
           ? (await uploadMultiCameraMatch({ name, courtType, cameras })).id
           : (await uploadMatchVideo({ name, courtType, file: cameras[0].file!, corners: cameras[0].corners })).id;
+      } else if (deviceCamera) {
+        if (!currentStream()) setDeviceStream(await openCamera());
+        const match = await startBrowserLiveMatch({ name, courtType, corners: cameras[0].corners });
+        startSending(match.id);
+        matchId = match.id;
       } else {
         const missing = cameras.findIndex((c) => !c.streamUrl);
         if (missing !== -1) {
@@ -118,7 +169,7 @@ export default function NewSession() {
           Subir vídeo
         </button>
         <button type="button" className={mode === "live" ? "active" : ""} onClick={() => setMode("live")}>
-          En directo (RTSP)
+          En directo
         </button>
       </div>
 
@@ -142,7 +193,65 @@ export default function NewSession() {
           </select>
         </div>
 
-        {cameras.map((cam, i) => (
+        {mode === "live" && (
+          <div className="form-group">
+            <label>Cámara</label>
+            <div className="source-choice">
+              <button
+                type="button"
+                className={`btn btn-small${liveSource === "device" ? " active" : ""}`}
+                onClick={() => chooseLiveSource("device")}
+              >
+                📱 Cámara de este dispositivo
+              </button>
+              <button
+                type="button"
+                className={`btn btn-small${liveSource === "rtsp" ? " active" : ""}`}
+                onClick={() => chooseLiveSource("rtsp")}
+              >
+                📹 Cámara IP (RTSP)
+              </button>
+            </div>
+          </div>
+        )}
+
+        {deviceCamera && (
+          <fieldset className="camera-single">
+            {!cameraSupported() && (
+              <p className="error-text">
+                {window.isSecureContext
+                  ? "Este navegador no permite usar la cámara."
+                  : "El navegador solo permite usar la cámara en páginas https:// (usa el enlace público de Colab)."}
+              </p>
+            )}
+            {deviceStream ? (
+              <DeviceCameraPreview stream={deviceStream} />
+            ) : (
+              <div className="form-group">
+                <button type="button" className="btn" onClick={handleOpenCamera} disabled={openingCamera}>
+                  {openingCamera ? "Abriendo cámara…" : "Activar cámara"}
+                </button>
+              </div>
+            )}
+            <p className="helper-text">
+              Coloca el móvil fijo (trípode o apoyado), en horizontal, encuadrando la pista desde la
+              banda. Mientras dure la sesión deja esta página abierta y en primer plano: la imagen se
+              envía a la app para analizarla.
+            </p>
+            {deviceStream && (
+              <CalibrationFields
+                grabFrame={captureFrame}
+                region="full"
+                onChange={(corners, incomplete) => {
+                  updateCamera(cameras[0].key, { corners, calibrationIncomplete: incomplete });
+                  if (!incomplete) setError(null);
+                }}
+              />
+            )}
+          </fieldset>
+        )}
+
+        {!deviceCamera && cameras.map((cam, i) => (
           <fieldset key={cam.key} className={multi ? "camera-card" : "camera-single"}>
             {multi && (
               <legend>
@@ -258,7 +367,7 @@ export default function NewSession() {
           </fieldset>
         ))}
 
-        {cameras.length < MAX_CAMERAS && (
+        {!deviceCamera && cameras.length < MAX_CAMERAS && (
           <div className="form-group">
             <button type="button" className="btn" onClick={addCamera}>
               + Añadir {multi ? "otra cámara" : "una segunda cámara"}
@@ -281,7 +390,9 @@ export default function NewSession() {
               ? multi
                 ? `Analizar ${cameras.length} vídeos`
                 : "Analizar vídeo"
-              : "Iniciar transmisión en directo"}
+              : deviceCamera
+                ? "Empezar a analizar con esta cámara"
+                : "Iniciar transmisión en directo"}
         </button>
       </form>
     </div>

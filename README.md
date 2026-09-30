@@ -7,8 +7,8 @@ detectar y seguir a los jugadores y el balón, calcula estadísticas físicas
 eventos tácticos (posesión, tiros, goles), todo consultable en un dashboard
 web y exportable a un informe PDF.
 
-Soporta tanto **subir un vídeo grabado** como **conectar una cámara/stream
-en directo (RTSP)**.
+Soporta **subir un vídeo grabado** y el análisis **en directo**, con la
+cámara del propio móvil/portátil o con cámaras IP (RTSP).
 
 ## Arquitectura
 
@@ -124,8 +124,10 @@ Abre http://localhost:5173.
 
 1. En el dashboard, pulsa **Nueva sesión**.
 2. Elige la modalidad (pista o playa).
-3. Elige **Subir vídeo** (arrastra el archivo grabado con tu cámara fija) o
-   **En directo** (introduce la URL RTSP de tu cámara).
+3. Elige **Subir vídeo** (el archivo grabado con tu cámara fija) o
+   **En directo**: con la **cámara de este dispositivo** (pon el móvil fijo
+   encuadrando la pista y deja la página abierta: envía la imagen a la app)
+   o con una **cámara IP** (su URL RTSP).
 4. (Recomendado) Activa la **calibración** y pulsa **Marcar sobre la imagen**:
    la app detecta las 4 esquinas de la pista en un fotograma de tu vídeo (o
    una captura de la cámara en directo); revísalas y arrastra las que no

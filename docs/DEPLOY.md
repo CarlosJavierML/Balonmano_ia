@@ -27,8 +27,10 @@ Detalles:
 - Por el enlace se pueden subir vídeos de hasta ~100 MB (límite del túnel
   gratuito de Cloudflare). Para partidos completos, copia los vídeos a
   `BalonmanoIA/importar` en tu Drive y ejecuta el paso 4 del cuaderno.
-- El directo (RTSP) no funciona: la cámara del pabellón no es accesible
-  desde Google.
+- **Directo con el móvil**: *Nueva sesión → En directo → Cámara de este
+  dispositivo*. El móvil envía su imagen por el enlace y ves las
+  estadísticas al momento. Las cámaras IP (RTSP) de la red del pabellón, en
+  cambio, no son accesibles desde Google.
 
 ## Opción B — Tu ordenador + enlace público (gratis)
 
@@ -127,10 +129,10 @@ app_port: 7860
   por falta de uso). Para conservarlos, en **Settings →
   Persistent storage** se puede añadir un disco (de pago), que se monta en
   `/data`, justo donde la app guarda todo.
-- **Directo (RTSP)**: desde la nube solo se puede conectar a cámaras
-  accesibles desde internet. Una cámara IP en la red del pabellón no es
-  visible desde fuera; para el directo, lo práctico es ejecutar la app en un
-  ordenador del propio pabellón (opción B).
+- **Directo**: con la cámara del móvil funciona desde cualquier sitio. Con
+  cámaras IP (RTSP), desde la nube solo se puede conectar a cámaras
+  accesibles desde internet; una cámara IP en la red del pabellón no es
+  visible desde fuera, así que para ellas lo práctico es la opción B.
 
 ## Variables de configuración útiles
 
