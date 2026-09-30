@@ -56,6 +56,12 @@ equipos, etc.).
 7. **Informe**: todo se persiste en base de datos y se puede descargar como
    PDF con gráficas, tablas y mapas de calor.
 
+## Probarlo en la nube
+
+Ver [`docs/DEPLOY.md`](docs/DEPLOY.md): despliegue gratuito en Hugging Face
+Spaces (un solo contenedor con dashboard, API y análisis, protegido con
+contraseña) que se actualiza solo en cada push.
+
 ## Puesta en marcha rápida (Docker)
 
 ```bash

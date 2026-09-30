@@ -1,9 +1,12 @@
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+# Videos, database, reports... Override with BALONMANO_DATA_DIR (e.g. a
+# persistent disk mounted at /data in a cloud deployment).
+DATA_DIR = Path(os.environ.get("BALONMANO_DATA_DIR", BASE_DIR / "data"))
 VIDEOS_DIR = DATA_DIR / "videos"
 REPORTS_DIR = DATA_DIR / "reports"
 HEATMAPS_DIR = DATA_DIR / "heatmaps"
@@ -32,6 +35,15 @@ class Settings(BaseSettings):
     analysis_target_fps: float = 6.0
 
     cors_origins: list[str] = ["*"]
+
+    # Built frontend (frontend/dist) to serve from this same server, so a
+    # single container/URL hosts both the dashboard and the API. Unset in
+    # local development, where Vite serves the frontend.
+    frontend_dir: str | None = None
+    # When set, every request (except /health) requires this password via
+    # HTTP Basic auth (any username). Use it for any deployment reachable
+    # from the internet: the app has no user accounts of its own.
+    access_password: str | None = None
 
     # Analysis job queue (see app/worker). By default the worker runs inside
     # the web process, which is all a single-machine setup needs. For a
