@@ -16,10 +16,10 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from app.config import settings
-from app.court import CourtCalibration, CourtConfig
+from app.court import CourtCalibration, CourtConfig, CourtRegion
 from app.vision.detector import Detector
-from app.vision.pipeline import BallFrame, TrackFrame, TrackingResult
-from app.vision.tracker import BallTracker, PlayerTracker
+from app.vision.fusion import CameraTracking, fuse_cameras
+from app.vision.pipeline import FrameProcessor, TrackingResult, _fallback_calibration
 
 try:
     import cv2
@@ -45,15 +45,20 @@ class LiveSession:
         court: CourtConfig,
         calibration: CourtCalibration | None,
         target_fps: float | None = None,
+        region: CourtRegion = CourtRegion.FULL,
+        clock_start: float | None = None,
     ):
+        """``clock_start`` (a `time.time()` value) lets several cameras of the
+        same session share one clock, so their timestamps are already in sync."""
         self.stream_url = stream_url
         self.court = court
         self.calibration = calibration
+        self.region = CourtRegion(region)
         self.target_fps = target_fps or settings.analysis_target_fps
 
         self.state = LiveState(
             result=TrackingResult(fps=self.target_fps, duration_s=0.0, calibrated=calibration is not None),
-            started_at=time.time(),
+            started_at=clock_start if clock_start is not None else time.time(),
         )
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -61,6 +66,10 @@ class LiveSession:
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def request_stop(self) -> None:
+        """Signals the capture thread to exit without waiting for it."""
+        self._stop_event.set()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -77,6 +86,7 @@ class LiveSession:
                 calibrated=self.state.result.calibrated,
                 player_frames=list(self.state.result.player_frames),
                 ball_frames=list(self.state.result.ball_frames),
+                color_samples={k: list(v) for k, v in self.state.result.color_samples.items()},
             )
 
     def _run(self) -> None:
@@ -92,13 +102,13 @@ class LiveSession:
             return
 
         detector = Detector()
-        player_tracker = PlayerTracker()
-        ball_tracker = BallTracker()
-        calib = self.calibration
+        processor: FrameProcessor | None = None
+        # Owned by this thread; copied into the shared state under the lock.
+        color_samples: dict[int, list[np.ndarray]] = {}
 
         min_frame_interval = 1.0 / self.target_fps
         next_due = 0.0
-        start = time.time()
+        start = self.state.started_at
 
         try:
             while not self._stop_event.is_set():
@@ -114,34 +124,81 @@ class LiveSession:
                     continue
                 next_due = now + min_frame_interval
 
-                if calib is None:
-                    h, w = frame.shape[:2]
-                    from app.vision.pipeline import _fallback_calibration
+                if processor is None:
+                    calib = self.calibration
+                    if calib is None:
+                        h, w = frame.shape[:2]
+                        calib = _fallback_calibration(self.court, w, h, self.region)
+                    processor = FrameProcessor(detector, calib)
 
-                    calib = _fallback_calibration(self.court, w, h)
-
-                detections = detector.detect(frame)
-                tracked_players = player_tracker.update(detections.persons)
-                ball_point_px = ball_tracker.update(detections.balls)
-
+                # Detection runs outside the lock (it's the slow part); only
+                # appending to the shared result is done while holding it.
+                frame_result = TrackingResult(fps=self.target_fps, duration_s=0.0, calibrated=True)
+                frame_result.color_samples = color_samples
+                processor.process(frame, now, frame_result)
                 with self.state.lock:
-                    if tracked_players:
-                        anchors_px = np.array(
-                            [d.anchor_point for _, d in tracked_players], dtype=np.float32
-                        )
-                        world_pts = calib.pixel_to_world(anchors_px)
-                        for (track_id, _), (wx, wy) in zip(tracked_players, world_pts):
-                            self.state.result.player_frames.append(
-                                TrackFrame(t=now, track_id=track_id, x=float(wx), y=float(wy))
-                            )
-                    if ball_point_px is not None:
-                        world_pt = calib.pixel_to_world(np.array([ball_point_px], dtype=np.float32))[0]
-                        self.state.result.ball_frames.append(
-                            BallFrame(t=now, x=float(world_pt[0]), y=float(world_pt[1]))
-                        )
+                    self.state.result.player_frames.extend(frame_result.player_frames)
+                    self.state.result.ball_frames.extend(frame_result.ball_frames)
+                    for f in frame_result.player_frames:
+                        self.state.result.color_samples[f.track_id] = list(color_samples.get(f.track_id, []))
         finally:
             cap.release()
             self.state.connected = False
+
+
+def grab_preview_frame(stream_url: str, max_attempts: int = 25) -> bytes:
+    """Reads a single frame from a stream/camera and returns it JPEG-encoded."""
+    if cv2 is None:
+        raise RuntimeError("opencv-python is required for live streaming")
+    cap = cv2.VideoCapture(stream_url)
+    try:
+        if not cap.isOpened():
+            raise ValueError(f"No se pudo abrir el stream: {stream_url}")
+        # The first reads of some IP cameras return empty/grey frames while
+        # the decoder syncs to a keyframe; retry a few times.
+        for _ in range(max_attempts):
+            ok, frame = cap.read()
+            if ok and frame is not None and frame.size:
+                encoded_ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if encoded_ok:
+                    return buf.tobytes()
+        raise ValueError("El stream no devolvió ninguna imagen")
+    finally:
+        cap.release()
+
+
+class MultiCameraLiveSession:
+    """Several cameras of one live session: one capture thread per camera on
+    a shared clock. `snapshot()` returns the fused view (same interface as
+    `LiveSession`), `camera_snapshots()` each camera's own trajectories."""
+
+    def __init__(self, cameras: list[tuple[int, LiveSession]], court: CourtConfig) -> None:
+        self.cameras = cameras  # (camera index, session), index 0 first
+        self.court = court
+
+    def start(self) -> None:
+        for _, cam in self.cameras:
+            cam.start()
+
+    def stop(self) -> None:
+        # Signal every camera first so they all stop at (about) the same time.
+        for _, cam in self.cameras:
+            cam.request_stop()
+        for _, cam in self.cameras:
+            cam.stop()
+
+    def camera_snapshots(self) -> list[tuple[int, TrackingResult]]:
+        return [(index, cam.snapshot()) for index, cam in self.cameras]
+
+    def snapshot(self) -> TrackingResult:
+        fused, _ = fuse_cameras(
+            [
+                CameraTracking(index, cam.region, 0.0, result)
+                for (index, cam), (_, result) in zip(self.cameras, self.camera_snapshots())
+            ],
+            self.court,
+        )
+        return fused
 
 
 class LiveSessionRegistry:
@@ -152,11 +209,11 @@ class LiveSessionRegistry:
         self._sessions: dict[int, LiveSession] = {}
         self._lock = threading.Lock()
 
-    def add(self, match_id: int, session: LiveSession) -> None:
+    def add(self, match_id: int, session: LiveSession | MultiCameraLiveSession) -> None:
         with self._lock:
             self._sessions[match_id] = session
 
-    def get(self, match_id: int) -> LiveSession | None:
+    def get(self, match_id: int) -> LiveSession | MultiCameraLiveSession | None:
         with self._lock:
             return self._sessions.get(match_id)
 

@@ -1,10 +1,11 @@
 import type { CourtType, MatchStatus } from "../types";
 
 const STATUS_LABEL: Record<MatchStatus, string> = {
-  pending: "Pendiente",
+  pending: "En cola",
   processing: "Procesando",
   done: "Listo",
   failed: "Error",
+  cancelled: "Cancelado",
 };
 
 export function StatusBadge({ status }: { status: MatchStatus }) {

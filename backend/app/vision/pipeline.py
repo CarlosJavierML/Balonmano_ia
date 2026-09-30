@@ -8,12 +8,18 @@ ByteTrack with a different detector/tracker later touches only this file).
 
 from __future__ import annotations
 
+import gzip
+import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
+from app.analysis.teams import MAX_SAMPLES_PER_TRACK, jersey_color_feature
+
 from app.config import settings
-from app.court import CourtCalibration, CourtConfig
+from app.court import CourtCalibration, CourtConfig, CourtRegion
 from app.vision.detector import Detector
 from app.vision.tracker import BallTracker, PlayerTracker
 
@@ -45,11 +51,49 @@ class TrackingResult:
     calibrated: bool
     player_frames: list[TrackFrame] = field(default_factory=list)
     ball_frames: list[BallFrame] = field(default_factory=list)
+    # Jersey color samples (Lab) per track id, for team assignment.
+    color_samples: dict[int, list[np.ndarray]] = field(default_factory=dict)
+
+    def save(self, path: Path) -> None:
+        """Stores the raw trajectories (compact gzipped JSON) so the session
+        can be re-analyzed later -- e.g. after a manual team correction --
+        without running the vision models again."""
+        data = {
+            "fps": self.fps,
+            "duration_s": self.duration_s,
+            "calibrated": self.calibrated,
+            "players": [[round(f.t, 3), f.track_id, round(f.x, 3), round(f.y, 3)] for f in self.player_frames],
+            "ball": [[round(f.t, 3), round(f.x, 3), round(f.y, 3)] for f in self.ball_frames],
+            "colors": {
+                str(k): [[round(float(c), 2) for c in sample] for sample in v]
+                for k, v in self.color_samples.items()
+            },
+        }
+        with gzip.open(path, "wt", encoding="utf-8") as fh:
+            json.dump(data, fh, separators=(",", ":"))
+
+    @classmethod
+    def load(cls, path: Path) -> "TrackingResult":
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return cls(
+            fps=data["fps"],
+            duration_s=data["duration_s"],
+            calibrated=data["calibrated"],
+            player_frames=[TrackFrame(t=t, track_id=i, x=x, y=y) for t, i, x, y in data["players"]],
+            ball_frames=[BallFrame(t=t, x=x, y=y) for t, x, y in data["ball"]],
+            color_samples={
+                int(k): [np.asarray(s, dtype=np.float32) for s in v] for k, v in data["colors"].items()
+            },
+        )
 
 
-def _fallback_calibration(court: CourtConfig, frame_width: int, frame_height: int) -> CourtCalibration:
+def _fallback_calibration(
+    court: CourtConfig, frame_width: int, frame_height: int, region: CourtRegion = CourtRegion.FULL
+) -> CourtCalibration:
     """Best-effort pixel->world mapping when no manual calibration was given:
-    assumes the fixed camera frames the whole court edge-to-edge. Good enough
+    assumes the fixed camera frames its region (by default the whole court)
+    edge-to-edge. Good enough
     for a quick first look; real sessions should calibrate the 4 corners for
     accurate distances/speeds (perspective distortion otherwise skews far-side
     measurements)."""
@@ -60,7 +104,42 @@ def _fallback_calibration(court: CourtConfig, frame_width: int, frame_height: in
         (frame_width, frame_height),
         (0, frame_height),
     ]
-    return CourtCalibration(court, corners)
+    return CourtCalibration(court, corners, region)
+
+
+class FrameProcessor:
+    """Runs detection + tracking on one frame and appends world-space
+    trajectories and jersey color samples to a `TrackingResult`.
+
+    Shared by the uploaded-video pipeline and the live stream session so
+    both produce exactly the same data.
+    """
+
+    def __init__(self, detector: Detector, calibration: CourtCalibration) -> None:
+        self.detector = detector
+        self.calibration = calibration
+        self.player_tracker = PlayerTracker()
+        self.ball_tracker = BallTracker()
+
+    def process(self, frame: np.ndarray, t: float, result: TrackingResult) -> None:
+        detections = self.detector.detect(frame)
+
+        tracked_players = self.player_tracker.update(detections.persons)
+        if tracked_players:
+            anchors_px = np.array([det.anchor_point for _, det in tracked_players], dtype=np.float32)
+            world_pts = self.calibration.pixel_to_world(anchors_px)
+            for (track_id, det), (wx, wy) in zip(tracked_players, world_pts):
+                result.player_frames.append(TrackFrame(t=t, track_id=track_id, x=float(wx), y=float(wy)))
+                samples = result.color_samples.setdefault(track_id, [])
+                if len(samples) < MAX_SAMPLES_PER_TRACK:
+                    feature = jersey_color_feature(frame, det.xyxy)
+                    if feature is not None:
+                        samples.append(feature)
+
+        ball_point_px = self.ball_tracker.update(detections.balls)
+        if ball_point_px is not None:
+            world_pt = self.calibration.pixel_to_world(np.array([ball_point_px], dtype=np.float32))[0]
+            result.ball_frames.append(BallFrame(t=t, x=float(world_pt[0]), y=float(world_pt[1])))
 
 
 class VideoAnalysisPipeline:
@@ -73,7 +152,12 @@ class VideoAnalysisPipeline:
         video_path: str,
         court: CourtConfig,
         calibration: CourtCalibration | None = None,
+        on_progress: Callable[[float], None] | None = None,
+        region: CourtRegion = CourtRegion.FULL,
     ) -> TrackingResult:
+        """Analyzes a video file. ``on_progress`` (if given) is called from
+        this thread after every analyzed frame with the fraction of the video
+        processed, in [0, 1]; an exception raised by it aborts the analysis."""
         if cv2 is None:
             raise RuntimeError("opencv-python is required to analyze video files")
 
@@ -88,43 +172,35 @@ class VideoAnalysisPipeline:
         duration_s = total_frames / source_fps if source_fps else 0.0
 
         calibrated = calibration is not None
-        calib = calibration or _fallback_calibration(court, frame_width, frame_height)
+        calib = calibration or _fallback_calibration(court, frame_width, frame_height, region)
 
         frame_stride = max(1, round(source_fps / self.target_fps))
         effective_fps = source_fps / frame_stride
 
-        player_tracker = PlayerTracker()
-        ball_tracker = BallTracker()
-
+        processor = FrameProcessor(self.detector, calib)
         result = TrackingResult(fps=effective_fps, duration_s=duration_s, calibrated=calibrated)
 
         frame_idx = 0
         try:
             while True:
-                ok, frame = cap.read()
-                if not ok:
-                    break
                 if frame_idx % frame_stride != 0:
+                    # grab() skips decoding frames we won't analyze, which is
+                    # much cheaper than read() on long high-FPS footage.
+                    if not cap.grab():
+                        break
                     frame_idx += 1
                     continue
 
-                t = frame_idx / source_fps
-                detections = self.detector.detect(frame)
+                ok, frame = cap.read()
+                if not ok:
+                    break
 
-                tracked_players = player_tracker.update(detections.persons)
-                if tracked_players:
-                    anchors_px = np.array(
-                        [det.anchor_point for _, det in tracked_players], dtype=np.float32
-                    )
-                    world_pts = calib.pixel_to_world(anchors_px)
-                    for (track_id, _), (wx, wy) in zip(tracked_players, world_pts):
-                        result.player_frames.append(TrackFrame(t=t, track_id=track_id, x=float(wx), y=float(wy)))
+                processor.process(frame, frame_idx / source_fps, result)
 
-                ball_point_px = ball_tracker.update(detections.balls)
-                if ball_point_px is not None:
-                    world_pt = calib.pixel_to_world(np.array([ball_point_px], dtype=np.float32))[0]
-                    result.ball_frames.append(BallFrame(t=t, x=float(world_pt[0]), y=float(world_pt[1])))
-
+                if on_progress is not None:
+                    # Called even when the frame count is unknown (value 0):
+                    # the callback is also how a cancellation interrupts us.
+                    on_progress(min(1.0, frame_idx / total_frames) if total_frames > 0 else 0.0)
                 frame_idx += 1
         finally:
             cap.release()

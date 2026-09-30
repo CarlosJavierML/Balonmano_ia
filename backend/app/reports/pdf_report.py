@@ -58,10 +58,54 @@ def _format_ts(seconds: float) -> str:
 
 
 EVENT_LABELS = {
+    "pase": "Pase",
+    "perdida": "Pérdida de balón",
     "cambio_posesion": "Cambio de posesión",
     "tiro": "Tiro",
     "gol": "Gol",
 }
+
+
+TABLE_STYLE = TableStyle(
+    [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f6f43")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+    ]
+)
+
+SIDE_LABELS = {"left": "izquierda", "right": "derecha"}
+
+
+ROLE_LABELS = {"jugador": "Jugador", "portero": "Portero", "arbitro": "Árbitro / otro"}
+
+
+def team_display_name(team: str, team_names: dict | None) -> str:
+    return (team_names or {}).get(team) or f"Equipo {team}"
+
+
+def _team_summary_table(team_summary: dict, team_names: dict | None) -> Table:
+    teams = sorted(team_summary)
+    rows = [["", *[team_display_name(t, team_names) for t in teams]]]
+    for label, key, fmt in (
+        ("Jugadores", "players", "{}"),
+        ("Posesión", "possession_pct", "{} %"),
+        ("Pases", "pases", "{}"),
+        ("Pérdidas", "perdidas", "{}"),
+        ("Tiros", "tiros", "{}"),
+        ("Goles", "goles", "{}"),
+    ):
+        rows.append([label, *[fmt.format(team_summary[t].get(key, 0)) for t in teams]])
+
+    table = Table(rows, hAlign="LEFT", colWidths=[4 * cm] + [3.5 * cm] * len(teams))
+    table.setStyle(TABLE_STYLE)
+    # Color chip on each team header, using the detected jersey color.
+    for col, team in enumerate(teams, start=1):
+        color = team_summary[team].get("color")
+        if color:
+            table.setStyle(TableStyle([("LINEBELOW", (col, 0), (col, 0), 4, colors.HexColor(color))]))
+    return table
 
 
 def build_match_report(
@@ -84,7 +128,28 @@ def build_match_report(
             styles["Normal"],
         )
     )
+    if match.cameras:
+        region_labels = {"full": "pista completa", "left": "mitad izquierda", "right": "mitad derecha"}
+        cams = ", ".join(f"{c.name} ({region_labels.get(c.region, c.region)})" for c in match.cameras)
+        people = (match.fusion_report or {}).get("people")
+        story.append(
+            Paragraph(
+                f"Cámaras: {cams}." + (f" {people} personas identificadas tras unir las cámaras." if people else ""),
+                styles["Normal"],
+            )
+        )
     story.append(Spacer(1, 0.5 * cm))
+
+    if match.team_summary:
+        story.append(Paragraph("Resumen por equipos", styles["Heading2"]))
+        story.append(_team_summary_table(match.team_summary, match.team_names))
+        story.append(
+            Paragraph(
+                "Equipos asignados automáticamente por el color de la camiseta.",
+                styles["Italic"],
+            )
+        )
+        story.append(Spacer(1, 0.5 * cm))
 
     if player_stats:
         chart_path = tmp_dir / f"distance_{match.id}.png"
@@ -93,11 +158,15 @@ def build_match_report(
         story.append(Spacer(1, 0.5 * cm))
 
         story.append(Paragraph("Estadísticas físicas por jugador", styles["Heading2"]))
-        table_data = [["Jugador", "Distancia (m)", "Vel. media (km/h)", "Vel. máx (km/h)", "Sprints"]]
+        table_data = [
+            ["Jugador", "Equipo", "Rol", "Distancia (m)", "Vel. media (km/h)", "Vel. máx (km/h)", "Sprints"]
+        ]
         for s in player_stats:
             table_data.append(
                 [
                     s.label or f"#{s.track_id}",
+                    team_display_name(s.team, match.team_names) if s.team else "—",
+                    ROLE_LABELS.get(s.role or "", "—"),
                     f"{s.distance_m:.0f}",
                     f"{s.avg_speed_kmh:.1f}",
                     f"{s.max_speed_kmh:.1f}",
@@ -105,16 +174,7 @@ def build_match_report(
                 ]
             )
         table = Table(table_data, hAlign="LEFT")
-        table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f6f43")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ]
-            )
-        )
+        table.setStyle(TABLE_STYLE)
         story.append(table)
         story.append(Spacer(1, 0.5 * cm))
 
@@ -129,29 +189,23 @@ def build_match_report(
     story.append(PageBreak())
     story.append(Paragraph("Eventos tácticos detectados", styles["Heading2"]))
     if events:
+        labels = {s.track_id: s.label or f"#{s.track_id}" for s in player_stats}
         event_table_data = [["Minuto", "Evento", "Detalle"]]
         for e in sorted(events, key=lambda ev: ev.timestamp_s):
             detail_parts = []
             if e.track_id_from is not None:
-                detail_parts.append(f"desde #{e.track_id_from}")
+                detail_parts.append(f"desde {labels.get(e.track_id_from, f'#{e.track_id_from}')}")
             if e.track_id_to is not None:
-                detail_parts.append(f"hacia #{e.track_id_to}")
+                detail_parts.append(f"hacia {labels.get(e.track_id_to, f'#{e.track_id_to}')}")
             if e.meta and "side" in e.meta:
-                detail_parts.append(f"portería {e.meta['side']}")
+                detail_parts.append(f"portería {SIDE_LABELS.get(e.meta['side'], e.meta['side'])}")
+            if e.meta and "team" in e.meta:
+                detail_parts.append(team_display_name(e.meta["team"], match.team_names))
             event_table_data.append(
                 [_format_ts(e.timestamp_s), EVENT_LABELS.get(e.event_type, e.event_type), ", ".join(detail_parts)]
             )
         event_table = Table(event_table_data, hAlign="LEFT")
-        event_table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f6f43")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ]
-            )
-        )
+        event_table.setStyle(TABLE_STYLE)
         story.append(event_table)
     else:
         story.append(Paragraph("No se detectaron eventos tácticos en esta sesión.", styles["Normal"]))

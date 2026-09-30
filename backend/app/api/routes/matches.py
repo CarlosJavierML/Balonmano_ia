@@ -1,11 +1,17 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import REPORTS_DIR
 from app.db import get_session
 from app.models import Match
-from app.schemas import MatchDetailOut, MatchOut
+from app.schemas import CameraUpdateIn, JobOut, MatchDetailOut, MatchOut, PlayerUpdateIn, TeamNamesIn
+from app.vision.live import live_registry
+from app.worker.queue import JobAlreadyActiveError, active_job, enqueue, queue_positions
+from app.worker.tasks import TrackingUnavailableError, recompute_tactics
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
@@ -16,12 +22,12 @@ async def list_matches(session: AsyncSession = Depends(get_session)):
     return result.scalars().all()
 
 
-@router.get("/{match_id}", response_model=MatchDetailOut)
-async def get_match(match_id: int, session: AsyncSession = Depends(get_session)):
+async def _load_match(session: AsyncSession, match_id: int) -> Match:
     result = await session.execute(
         select(Match)
         .where(Match.id == match_id)
-        .options(selectinload(Match.player_stats), selectinload(Match.events))
+        .options(selectinload(Match.player_stats), selectinload(Match.events), selectinload(Match.cameras))
+        .execution_options(populate_existing=True)
     )
     match = result.scalar_one_or_none()
     if match is None:
@@ -29,10 +35,143 @@ async def get_match(match_id: int, session: AsyncSession = Depends(get_session))
     return match
 
 
+async def _detail(session: AsyncSession, match_id: int) -> MatchDetailOut:
+    match = await _load_match(session, match_id)
+    detail = MatchDetailOut.model_validate(match)
+    job = await active_job(session, match_id)
+    if job is not None:
+        positions = await queue_positions(session)
+        detail.active_job = JobOut.model_validate(job).model_copy(update={"position": positions.get(job.id)})
+    return detail
+
+
+@router.get("/{match_id}", response_model=MatchDetailOut)
+async def get_match(match_id: int, session: AsyncSession = Depends(get_session)):
+    return await _detail(session, match_id)
+
+
+@router.patch("/{match_id}/teams", response_model=MatchDetailOut)
+async def rename_teams(match_id: int, payload: TeamNamesIn, session: AsyncSession = Depends(get_session)):
+    match = await _load_match(session, match_id)
+    names = dict(match.team_names or {})
+    for team, name in payload.names.items():
+        name = name.strip()
+        if name:
+            names[team] = name[:60]
+        else:
+            names.pop(team, None)  # empty name = back to "Equipo A/B"
+    match.team_names = names or None
+    await session.commit()
+    return await _detail(session, match_id)
+
+
+@router.patch("/{match_id}/players/{track_id}", response_model=MatchDetailOut)
+async def update_player(
+    match_id: int, track_id: int, payload: PlayerUpdateIn, session: AsyncSession = Depends(get_session)
+):
+    """Rename a tracked person and/or fix their team or role. Team/role
+    changes re-run the tactical analysis (passes vs. turnovers, possession)
+    from the saved trajectories, without re-processing the video."""
+    match = await _load_match(session, match_id)
+    stat = next((s for s in match.player_stats if s.track_id == track_id), None)
+    if stat is None:
+        raise HTTPException(status_code=404, detail="Jugador no encontrado en esta sesión")
+
+    if payload.label is not None:
+        stat.label = payload.label.strip() or f"Jugador #{track_id}"
+
+    fields = payload.model_fields_set
+    if payload.reset or fields & {"team", "role"}:
+        if not match.editable:
+            raise HTTPException(
+                status_code=409,
+                detail="Esta sesión se analizó con una versión anterior y no guarda las trayectorias; "
+                "vuelve a analizar el vídeo para poder corregir equipos.",
+            )
+        overrides = {k: dict(v) for k, v in (match.overrides or {}).items()}
+        fix = {} if payload.reset else overrides.get(str(track_id), {})
+        if "team" in fields:
+            fix["team"] = payload.team
+        if "role" in fields:
+            fix["role"] = payload.role
+        if fix:
+            overrides[str(track_id)] = fix
+        else:
+            overrides.pop(str(track_id), None)
+        match.overrides = overrides or None
+        try:
+            await recompute_tactics(session, match)
+        except TrackingUnavailableError as exc:  # pragma: no cover - guarded by `editable`
+            raise HTTPException(status_code=409, detail="Trayectorias no disponibles") from exc
+
+    await session.commit()
+    return await _detail(session, match_id)
+
+
 @router.delete("/{match_id}", status_code=204)
 async def delete_match(match_id: int, session: AsyncSession = Depends(get_session)):
-    match = await session.get(Match, match_id)
+    result = await session.execute(
+        select(Match)
+        .where(Match.id == match_id)
+        .options(
+            selectinload(Match.player_stats),
+            selectinload(Match.events),
+            selectinload(Match.cameras),
+            selectinload(Match.jobs),
+        )
+    )
+    match = result.scalar_one_or_none()
     if match is None:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if live_registry.get(match_id) is not None:
+        raise HTTPException(status_code=409, detail="Detén la transmisión en directo antes de eliminarla")
+    job = await active_job(session, match_id)
+    if job is not None and job.status == "running":
+        raise HTTPException(status_code=409, detail="Cancela el análisis en curso antes de eliminar la sesión")
+
+    files = [match.video_path, match.tracking_path, str(REPORTS_DIR / f"match_{match_id}.pdf")]
+    files += [p for cam in match.cameras for p in (cam.video_path, cam.tracking_path)]
+    files += [s.heatmap_path for s in match.player_stats]
+
     await session.delete(match)
     await session.commit()
+
+    for path in files:
+        if path:
+            Path(path).unlink(missing_ok=True)
+
+
+@router.patch("/{match_id}/cameras/{camera_index}", response_model=MatchDetailOut)
+async def update_camera(
+    match_id: int, camera_index: int, payload: CameraUpdateIn, session: AsyncSession = Depends(get_session)
+):
+    """Renames a camera and/or fixes its time sync. A sync change re-fuses
+    the cameras from their saved trajectories (queued; no video re-analysis)."""
+    match = await _load_match(session, match_id)
+    camera = next((c for c in match.cameras if c.index == camera_index), None)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Cámara no encontrada en esta sesión")
+
+    if payload.name is not None:
+        camera.name = payload.name.strip() or f"Cámara {camera_index + 1}"
+
+    sync_changed = payload.auto_sync or "time_offset_s" in payload.model_fields_set
+    if sync_changed:
+        if camera_index == match.cameras[0].index:
+            raise HTTPException(status_code=400, detail="La primera cámara es la referencia de tiempo (desfase 0)")
+        if not all(c.tracking_path and Path(c.tracking_path).exists() for c in match.cameras):
+            raise HTTPException(
+                status_code=409, detail="Las cámaras aún no se han analizado; espera a que termine el análisis"
+            )
+        if payload.auto_sync:
+            camera.time_offset_s = None
+            camera.sync_info = None  # force a new audio detection
+        else:
+            camera.time_offset_s = payload.time_offset_s
+        try:
+            await enqueue(session, match, "tracking")
+        except JobAlreadyActiveError as exc:
+            raise HTTPException(status_code=409, detail="Esta sesión ya tiene un análisis en cola o en curso") from exc
+
+    await session.commit()
+    return await _detail(session, match_id)

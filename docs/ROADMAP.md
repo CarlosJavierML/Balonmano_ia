@@ -19,16 +19,22 @@ banquillo.
 3. Sustituir `settings.yolo_model_path` por el nuevo checkpoint — el resto
    del pipeline no cambia (misma interfaz `Detector.detect()`).
 
-## 2. Asignación de equipos (clustering de color de camiseta)
+## 2. Asignación de equipos (clustering de color de camiseta) — ✅ hecho
 
-Con esto se puede distinguir un **pase** (posesión pasa a un compañero) de
-una **pérdida de posesión** (pasa a un rival), y calcular estadísticas por
-equipo (posesión total, eficacia de tiro, etc.).
+Implementado en `app/analysis/teams.py`: color mediano del torso en Lab +
+k-means de 2 clústeres; los tracks lejanos a ambos centroides (árbitros)
+quedan sin equipo. Con ello `tactical.py` distingue **pase** de
+**pérdida**, y se calcula posesión/pases/pérdidas/tiros/goles por equipo.
 
-**Plan**: extraer el color dominante de la camiseta en el recorte de cada
-detección de jugador (k-means sobre el tercio superior del bounding box) y
-agrupar en 2-3 clústeres (equipo A / equipo B / árbitro). Guardar el
-`team_label` en cada `TrackFrame` y usarlo en `app/analysis/tactical.py`.
+También hecho:
+- **Porteros** (`app/analysis/roles.py`): un track que pasa ≥70 % del tiempo
+  dentro de un área es portero; su equipo se deduce de a quién pasa el balón.
+- **Árbitros**: tracks con color fiable que no encaja en ningún equipo; se
+  excluyen de la posesión para que no "roben" el balón.
+- **Correcciones manuales**: renombrar equipos y jugadores, y corregir el
+  equipo/rol de un jugador. Las trayectorias se guardan
+  (`data/tracking/*.json.gz`), así que los eventos se recalculan sin volver
+  a procesar el vídeo.
 
 ## 3. Detección de eventos con un modelo entrenado (acción/vídeo)
 
@@ -43,28 +49,26 @@ rechace del portero vs. gol). Cuando haya suficientes clips etiquetados:
 - El contrato de salida (`TacticalEvent`) ya está pensado para que este
   modelo sustituya a `detect_events()` sin tocar BD, API ni informes.
 
-## 4. Escalar el procesamiento en segundo plano
+## 4. Escalar el procesamiento en segundo plano — ✅ hecho
 
-`BackgroundTasks` de FastAPI es síncrono a nivel de proceso: si suben dos
-vídeos largos a la vez, se compite por CPU/GPU. Para varios equipos usando
-la app a la vez:
+Cola persistida en la base de datos (`app/worker/`) con worker separable
+del proceso web, límite de concurrencia, posición y progreso visibles,
+cancelación, reintentos y recuperación de trabajos huérfanos. En Docker el
+worker va en su propio contenedor. Ver "Cola de análisis" en
+ARCHITECTURE.md (y por qué no Celery + Redis).
 
-- Mover `process_uploaded_video` / `finalize_live_session` a Celery + Redis
-  (o RQ), con un worker dedicado (idealmente con GPU) separado del proceso
-  web.
-- Esto también permite reintentos automáticos y una cola visible del
-  estado de cada análisis.
+Siguiente paso si algún día hace falta: con varias máquinas worker en red,
+pasar a PostgreSQL (SQLite compartido solo funciona en la misma máquina) y
+guardar vídeos/trayectorias en un almacenamiento común (p. ej. S3/MinIO).
 
-## 5. Calibración asistida
+## 5. Calibración asistida — ✅ hecho
 
-Hoy la calibración es manual (introducir 4 puntos en píxeles a mano). Se
-podría:
-
-- Mostrar el primer frame del vídeo en el formulario de subida y dejar al
-  usuario hacer clic directamente sobre las 4 esquinas (en vez de escribir
-  coordenadas).
-- Detectar automáticamente las líneas de la pista (Hough transform sobre
-  las líneas blancas) como punto de partida sugerido.
+El formulario muestra un fotograma del vídeo (o una captura del stream en
+directo vía `POST /matches/live/preview`), detecta automáticamente las 4
+esquinas a partir de las líneas blancas de la pista
+(`app/vision/court_lines.py`, `POST /calibration/suggest`) y permite
+arrastrarlas para ajustarlas. Posible mejora: detección basada en rectas
+(Hough) para pistas con líneas de varios colores o muy tapadas por jugadores.
 
 ## 6. GPU / rendimiento en directo
 
@@ -74,9 +78,26 @@ falta instalar la build de PyTorch con soporte CUDA correspondiente al
 hardware del club. Para RTSP de alta resolución, considerar bajar la
 resolución de captura o el `analysis_target_fps` en `app/config.py`.
 
-## 7. Multi-cámara
+## 7. Multi-cámara — ✅ hecho
 
-La arquitectura actual asume una única cámara fija. Para pistas con varias
-cámaras (p. ej. una por cada mitad de pista), el siguiente paso natural es
-fusionar trayectorias de varias fuentes usando la misma homografía por
-cámara y reconciliar IDs de tracking entre cámaras (re-identificación).
+Hasta 4 cámaras por sesión, tanto con vídeos subidos como en directo:
+
+- **Calibración por zona** (`app/court.py`): cada cámara se calibra con las
+  esquinas de la zona que ve (pista completa, mitad izquierda o derecha),
+  así que todas acaban en las mismas coordenadas en metros.
+- **Sincronización** (`app/vision/audio_sync.py`): automática por el sonido
+  (correlación de los "golpes" de audio: silbato, botes, lanzamientos),
+  manual, o por el reloj del servidor en directo. Se puede corregir después
+  y las cámaras se vuelven a unir sin repetir el análisis de vídeo.
+- **Fusión** (`app/vision/fusion.py`): une a la misma persona vista por dos
+  cámaras a la vez, encadena relevos entre cámaras (y cortes del tracker)
+  por posición, tiempo y color de camiseta, e interpola todas las
+  trayectorias en una rejilla temporal común.
+
+Siguientes pasos posibles:
+- Re-identificación por apariencia (un modelo de re-ID) para relevos con
+  huecos largos, donde hoy se crea una persona nueva.
+- Aplicar el encadenado de cortes del tracker también a sesiones de una sola
+  cámara (hoy la fusión solo se usa con 2+ cámaras).
+- Zonas personalizadas (p. ej. una cámara detrás de la portería) indicando
+  las coordenadas en metros de los 4 puntos.

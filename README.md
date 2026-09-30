@@ -20,7 +20,7 @@ balonmano_ia/
 │       ├── analysis/     Estadísticas físicas + eventos tácticos (heurística)
 │       ├── reports/      Generación de informes PDF
 │       ├── api/routes/   Endpoints REST
-│       └── worker/       Procesamiento en segundo plano
+│       └── worker/       Cola de análisis y worker (`python -m app.worker`)
 ├── frontend/         React + Vite + TypeScript (dashboard)
 └── docs/             Arquitectura y hoja de ruta detalladas
 ```
@@ -43,11 +43,24 @@ equipos, etc.).
 4. **Estadísticas físicas**: a partir de las trayectorias en metros se
    calcula distancia recorrida, velocidad media/máxima, sprints y mapas de
    calor por jugador.
-5. **Eventos tácticos**: reglas sobre la posición/velocidad del balón
-   respecto a los jugadores y las porterías detectan cambios de posesión,
-   tiros y goles.
-6. **Informe**: todo se persiste en base de datos y se puede descargar como
+5. **Equipos**: el color de la camiseta de cada jugador (tercio superior
+   del recorte, en espacio de color Lab) se agrupa en dos equipos con
+   k-means; los porteros se reconocen por pasar casi todo el tiempo en su
+   área y los árbitros quedan sin equipo (y no cuentan para la posesión).
+   Desde el dashboard puedes renombrar equipos y jugadores y corregir el
+   equipo o rol de cualquiera: las estadísticas se recalculan al momento.
+6. **Eventos tácticos**: reglas sobre la posición/velocidad del balón
+   respecto a los jugadores y las porterías detectan pases (entre
+   compañeros), pérdidas de balón (al rival), tiros y goles, además del
+   % de posesión de cada equipo.
+7. **Informe**: todo se persiste en base de datos y se puede descargar como
    PDF con gráficas, tablas y mapas de calor.
+
+## Probarlo en la nube
+
+Ver [`docs/DEPLOY.md`](docs/DEPLOY.md): despliegue gratuito en Hugging Face
+Spaces (un solo contenedor con dashboard, API y análisis, protegido con
+contraseña) que se actualiza solo en cada push.
 
 ## Puesta en marcha rápida (Docker)
 
@@ -57,6 +70,12 @@ docker compose up --build
 
 - Backend (API): http://localhost:8000 (docs interactivas en `/docs`)
 - Frontend (dashboard): http://localhost:8080
+- Worker de análisis: contenedor `worker`, que procesa la cola de vídeos de
+  uno en uno (`BALONMANO_WORKER_CONCURRENCY` para cambiarlo).
+
+Los vídeos subidos entran en una **cola de análisis** visible en el
+dashboard (posición, progreso, cancelar). Si el worker se reinicia a mitad
+de un análisis, el trabajo vuelve a la cola solo.
 
 ## Desarrollo local sin Docker
 
@@ -68,6 +87,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+```
+
+Así el servidor web lleva el worker de análisis integrado. Para analizar en
+otra máquina (p. ej. con GPU) o en un proceso aparte:
+
+```bash
+BALONMANO_EMBEDDED_WORKER=false uvicorn app.main:app   # solo API
+python -m app.worker                                   # worker (otra terminal/máquina)
 ```
 
 Requiere Python 3.10+. La primera vez que se analiza un vídeo, `ultralytics`
@@ -97,10 +124,16 @@ Abre http://localhost:5173.
 2. Elige la modalidad (pista o playa).
 3. Elige **Subir vídeo** (arrastra el archivo grabado con tu cámara fija) o
    **En directo** (introduce la URL RTSP de tu cámara).
-4. (Recomendado) Activa la **calibración manual** e indica en píxeles las 4
-   esquinas de la pista tal y como aparecen en la imagen de tu cámara —
-   mejora mucho la precisión de distancias y velocidades.
-5. Espera a que el análisis termine (o, en directo, observa las
+4. (Recomendado) Activa la **calibración** y pulsa **Marcar sobre la imagen**:
+   la app detecta las 4 esquinas de la pista en un fotograma de tu vídeo (o
+   una captura de la cámara en directo); revísalas y arrastra las que no
+   encajen, o haz clic en ellas a mano. Arriba/abajo son las bandas y
+   izquierda/derecha las líneas de gol. Mejora mucho la precisión de distancias y velocidades.
+   ¿Varias cámaras (p. ej. una por mitad de pista)? Pulsa **Añadir una
+   segunda cámara**, indica qué zona graba cada una y calíbralas con las
+   esquinas de su zona. En vídeos subidos se sincronizan solas por el sonido;
+   el desfase se puede ajustar después desde la sesión.
+5. Espera a que el análisis termine (con barra de progreso) (o, en directo, observa las
    estadísticas en tiempo real y pulsa **Detener transmisión** cuando
    acabes).
 6. Consulta el dashboard de la sesión y descarga el **informe en PDF**.
@@ -116,8 +149,9 @@ arquitectura:
   lo que puede perder el balón en momentos de oclusión o mucho movimiento.
 - Los eventos tácticos (pase, tiro, gol) se detectan con reglas basadas en
   posición/velocidad, no con un modelo entrenado en acciones de balonmano.
-- No hay todavía asignación automática de equipos (por color de camiseta),
-  así que no se distingue un pase de una pérdida de posesión.
+- La asignación de equipos por color de camiseta asume dos equipaciones
+  bien diferenciadas; con colores parecidos algunos jugadores pueden quedar
+  sin equipo (se pueden corregir a mano desde el dashboard).
 
 Todo esto está detallado, con plan concreto de mejora, en
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
