@@ -1,7 +1,7 @@
 import asyncio
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -12,7 +12,13 @@ from app.court import CourtRegion, CourtType, get_court_config
 from app.db import get_session
 from app.models import Camera, Match
 from app.schemas import LiveStatsSnapshot, LiveStreamStart, MatchOut, PlayerStatOut
-from app.vision.live import LiveSession, MultiCameraLiveSession, grab_preview_frame, live_registry
+from app.vision.live import (
+    BrowserLiveSession,
+    LiveSession,
+    MultiCameraLiveSession,
+    grab_preview_frame,
+    live_registry,
+)
 from app.worker.queue import enqueue
 from app.worker.tasks import build_calibration, tracking_path_for
 
@@ -35,6 +41,31 @@ async def preview_stream_frame(payload: PreviewRequest):
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(content=jpeg, media_type="image/jpeg")
+
+
+MAX_FRAME_BYTES = 5 * 1024 * 1024
+FRAME_WAIT_S = 5.0
+
+
+@router.post("/{match_id}/frame")
+async def push_browser_frame(match_id: int, request: Request, t: float | None = None):
+    """Receives one JPEG frame from the page's own camera (BrowserLiveSession).
+    `t` is the capture time in seconds since the session started."""
+    live_session = live_registry.get(match_id)
+    if live_session is None:
+        raise HTTPException(status_code=404, detail="No hay una transmisión activa con ese id")
+    if not isinstance(live_session, BrowserLiveSession):
+        raise HTTPException(status_code=409, detail="Esta sesión recibe la imagen de una cámara IP, no del navegador")
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Fotograma vacío")
+    if len(body) > MAX_FRAME_BYTES:
+        raise HTTPException(status_code=413, detail="Fotograma demasiado grande")
+    done = live_session.push(body, t)
+    # Answer once the frame is analyzed (bounded wait): the page sends the
+    # next frame only then, so the frame rate adapts to the server's speed.
+    await asyncio.to_thread(done.wait, FRAME_WAIT_S)
+    return {"frames_processed": live_session.state.frames_processed}
 
 
 @router.post("/start", response_model=MatchOut)
@@ -71,6 +102,11 @@ async def start_live_match(payload: LiveStreamStart, session: AsyncSession = Dep
             )
             sessions.append((index, live))
         live_session: LiveSession | MultiCameraLiveSession = MultiCameraLiveSession(sessions, court)
+    elif payload.source == "browser":
+        calibration_json = payload.calibration.model_dump() if payload.calibration else None
+        match.stream_url = BrowserLiveSession.SOURCE
+        match.calibration = calibration_json
+        live_session = BrowserLiveSession(court, build_calibration(court, calibration_json))
     else:
         single = payload.cameras[0] if payload.cameras else None
         stream_url = single.stream_url if single else payload.stream_url
@@ -149,7 +185,12 @@ async def live_snapshot(match_id: int, session: AsyncSession = Depends(get_sessi
     active_cutoff = result.duration_s - ACTIVE_TRACK_WINDOW_S
     active_tracks = len({f.track_id for f in result.player_frames if f.t >= active_cutoff})
 
+    source_state = getattr(live_session, "state", None)
     return LiveStatsSnapshot(
+        frames_processed=source_state.frames_processed if source_state else 0,
+        ai_ready=source_state.ready if source_state else True,
+        source_connected=source_state.connected if source_state else True,
+        source_error=source_state.error if source_state else None,
         match_id=match_id,
         elapsed_s=result.duration_s,
         active_tracks=active_tracks,

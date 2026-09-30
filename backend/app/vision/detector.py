@@ -57,6 +57,11 @@ class Detector:
     def __init__(self, confidence: float | None = None):
         self.confidence = confidence if confidence is not None else settings.detection_confidence
 
+    def warm_up(self) -> None:
+        """Loads the model and runs one throwaway inference, so the first real
+        frame isn't delayed by several seconds (model load, CUDA init)."""
+        self.detect(np.zeros((360, 640, 3), dtype=np.uint8))
+
     def detect(self, frame: np.ndarray) -> FrameDetections:
         model = _load_model()
         results = model.predict(

@@ -677,3 +677,33 @@ th {
 .sync-method.warn {
   color: var(--warning);
 }
+
+.device-preview {
+  display: block;
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  background: #000;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  margin: 10px 0;
+}
+
+.source-choice {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.source-choice button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.live-sender-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

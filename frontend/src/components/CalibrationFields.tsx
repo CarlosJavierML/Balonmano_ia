@@ -72,6 +72,7 @@ export default function CalibrationFields({
   onChange,
   videoFile,
   streamUrl,
+  grabFrame,
   region = "full",
 }: {
   /** Receives the 4 corners once they're all set, or undefined otherwise.
@@ -79,6 +80,8 @@ export default function CalibrationFields({
   onChange: (corners: PixelCorner[] | undefined, incomplete: boolean) => void;
   videoFile?: File | null;
   streamUrl?: string;
+  /** Captures a frame from a live source (e.g. this device's camera). */
+  grabFrame?: () => Promise<Blob>;
   /** Part of the court this camera films (multi-camera sessions). */
   region?: CourtRegion;
 }) {
@@ -133,7 +136,8 @@ export default function CalibrationFields({
     setFrameError(null);
     try {
       let url: string;
-      if (videoFile) url = await frameFromVideoFile(videoFile);
+      if (grabFrame) url = URL.createObjectURL(await grabFrame());
+      else if (videoFile) url = await frameFromVideoFile(videoFile);
       else if (streamUrl) url = URL.createObjectURL(await fetchStreamPreview(streamUrl));
       else throw new Error("Selecciona primero un vídeo o indica la URL del stream");
       setFrameUrl(url);
@@ -223,7 +227,7 @@ export default function CalibrationFields({
   const labels = CORNER_LABELS[region];
   const nextIndex = corners.findIndex((c) => c === null);
   const placed = corners.filter((c): c is PixelCorner => c !== null);
-  const canLoadFrame = Boolean(videoFile || streamUrl);
+  const canLoadFrame = Boolean(grabFrame || videoFile || streamUrl);
   const markerRadius = frameSize ? Math.max(frameSize.w, frameSize.h) / 120 : 6;
 
   return (

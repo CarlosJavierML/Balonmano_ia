@@ -72,6 +72,12 @@ class Match(Base):
     )
 
     @property
+    def live_source(self) -> str | None:
+        if self.source_mode != "live":
+            return None
+        return "browser" if self.stream_url == "browser" else "rtsp"
+
+    @property
     def editable(self) -> bool:
         """Manual team/role corrections need the saved trajectories."""
         return self.status == "done" and bool(self.tracking_path) and Path(self.tracking_path).exists()

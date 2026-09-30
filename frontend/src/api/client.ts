@@ -197,6 +197,33 @@ export async function fetchStreamPreview(streamUrl: string): Promise<Blob> {
   return res.blob();
 }
 
+/** Starts a live session fed by this device's camera (see camera/browserCamera). */
+export function startBrowserLiveMatch(params: {
+  name: string;
+  courtType: string;
+  corners?: PixelCorner[];
+}): Promise<Match> {
+  return request<Match>("/matches/live/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: params.name,
+      court_type: params.courtType,
+      source: "browser",
+      calibration: params.corners ? { corners: params.corners } : null,
+    }),
+  });
+}
+
+/** Sends one camera frame; resolves once the server has analyzed it. */
+export async function pushLiveFrame(matchId: number, frame: Blob, t: number): Promise<number> {
+  const res = await request<{ frames_processed: number }>(
+    `/matches/live/${matchId}/frame?t=${t.toFixed(3)}`,
+    { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: frame },
+  );
+  return res.frames_processed;
+}
+
 export function stopLiveMatch(id: number): Promise<Match> {
   return request<Match>(`/matches/live/${id}/stop`, { method: "POST" });
 }
