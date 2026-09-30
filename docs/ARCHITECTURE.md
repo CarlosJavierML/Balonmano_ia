@@ -115,6 +115,8 @@ subida de vídeo / fin de directo ──► jobs (status=queued)
 | `app/analysis/physical.py` | Trayectorias → distancia/velocidad/sprints/zonas/heatmap |
 | `app/analysis/tactical.py` | Trayectorias + equipos → eventos (pase, pérdida, tiro, gol) y resumen por equipo |
 | `app/reports/pdf_report.py` | Estadísticas + eventos → PDF |
+| `app/analysis/replay.py` | Trayectorias + equipos + eventos → datos de la recreación animada (`GET /matches/{id}/replay`) |
+| `app/reports/replay_video.py` | Recreación → vídeo MP4 H.264 (trabajo `replay_video` de la cola; no cambia el estado de la sesión) |
 | `app/worker/queue.py` | Operaciones de la cola: encolar, reclamar, recuperar huérfanos, cancelar |
 | `app/worker/runner.py` | El worker: concurrencia, latidos/progreso, cancelación, reintentos |
 | `app/worker/tasks.py` | Qué hace cada tipo de trabajo; pega todo lo anterior y persiste en BD |

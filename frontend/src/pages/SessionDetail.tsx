@@ -7,6 +7,7 @@ import {
   getMatch,
   reanalyzeMatch,
   renameTeams,
+  renderReplayVideo,
   reportUrl,
   stopLiveMatch,
   updateCamera,
@@ -19,6 +20,8 @@ import { DistanceChart, SpeedChart } from "../components/StatsCharts";
 import { closeCamera, getStatus, stopSending } from "../camera/browserCamera";
 import CamerasPanel from "../components/CamerasPanel";
 import LiveSourcePanel from "../components/LiveSourcePanel";
+import ReplayVideoExport from "../components/ReplayVideoExport";
+import ReplayViewer from "../components/ReplayViewer";
 import TeamSummary from "../components/TeamSummary";
 import type { LiveStatsSnapshot, MatchDetail, MatchStatus, PlayerUpdate, TeamLabel } from "../types";
 
@@ -70,7 +73,8 @@ export default function SessionDetail() {
           setLiveSnapshot(null);
         }
 
-        if (FINISHED.includes(m.status) && intervalRef.current) {
+        // Keep polling while a job (e.g. rendering the recreation video) runs.
+        if (FINISHED.includes(m.status) && !m.active_job && intervalRef.current) {
           window.clearInterval(intervalRef.current);
           intervalRef.current = null;
         }
@@ -131,6 +135,17 @@ export default function SessionDetail() {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
       throw e;
+    }
+  }
+
+  async function handleRenderVideo(speed: 1 | 2 | 4) {
+    try {
+      await renderReplayVideo(matchId, speed);
+      setMatch(await getMatch(matchId));
+      setActionError(null);
+      setPollKey((k) => k + 1);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -370,6 +385,18 @@ export default function SessionDetail() {
               </div>
             </div>
           </div>
+
+          {match.editable && (
+            <div className="card">
+              <h2>Recreación de la sesión</h2>
+              <ReplayViewer
+                matchId={match.id}
+                version={`${match.events.length}-${match.player_stats.map((p) => `${p.label}${p.team}`).join()}-${match.team_names ? JSON.stringify(match.team_names) : ""}`}
+              />
+              <h3 style={{ marginTop: 18 }}>Vídeo para compartir</h3>
+              <ReplayVideoExport match={match} onRender={handleRenderVideo} />
+            </div>
+          )}
 
           <div className="card">
             <h2>Equipos</h2>

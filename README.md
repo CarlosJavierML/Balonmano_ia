@@ -140,7 +140,10 @@ Abre http://localhost:5173.
 5. Espera a que el análisis termine (con barra de progreso) (o, en directo, observa las
    estadísticas en tiempo real y pulsa **Detener transmisión** cuando
    acabes).
-6. Consulta el dashboard de la sesión y descarga el **informe en PDF**.
+6. Consulta el dashboard de la sesión: estadísticas, la **recreación
+   animada** de la sesión (la pista vista desde arriba con los jugadores
+   moviéndose, el balón y los eventos; se puede generar como **vídeo MP4**
+   para compartir) y el **informe en PDF**.
 
 ## Limitaciones actuales y hoja de ruta
 

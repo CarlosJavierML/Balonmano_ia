@@ -12,6 +12,7 @@ from app.worker.queue import (
     ACTIVE_STATUSES,
     JobAlreadyActiveError,
     active_job,
+    drives_match_status,
     enqueue,
     queue_positions,
     request_cancel,
@@ -48,10 +49,11 @@ async def list_jobs(include_finished: bool = False, session: AsyncSession = Depe
     rows.sort(key=lambda r: (order.get(r[0].status, 2), positions.get(r[0].id, 0)))
     return [
         QueueItemOut(
-            **JobOut.model_validate(job).model_dump(exclude={"position"}),
+            **JobOut.model_validate(job).model_dump(exclude={"position", "progress"}),
             position=positions.get(job.id),
             match_name=match.name,
-            progress=match.progress,
+            # Analysis progress lives on the match (shown on its page too).
+            progress=match.progress if drives_match_status(job.kind) else job.progress,
         )
         for job, match in rows
     ]

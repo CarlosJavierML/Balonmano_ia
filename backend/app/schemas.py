@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class PixelCorner(BaseModel):
@@ -74,6 +74,7 @@ class JobOut(BaseModel):
     match_id: int
     kind: str
     status: str
+    progress: float = 0.0
     attempts: int
     max_attempts: int
     cancel_requested: bool
@@ -89,7 +90,6 @@ class JobOut(BaseModel):
 
 class QueueItemOut(JobOut):
     match_name: str
-    progress: float
 
 
 class CameraOut(BaseModel):
@@ -140,6 +140,13 @@ class MatchDetailOut(MatchOut):
     active_job: JobOut | None = None
     cameras: list[CameraOut] = []
     fusion_report: dict[str, Any] | None = None
+    # Rendered recreation video, if any: {"speed", "created_at"} (no server path).
+    replay_video: dict[str, Any] | None = None
+
+    @field_validator("replay_video", mode="before")
+    @classmethod
+    def _hide_replay_path(cls, value: Any) -> Any:
+        return {k: v for k, v in value.items() if k != "path"} if isinstance(value, dict) else value
     team_summary: dict[str, Any] | None = None
     team_names: dict[str, str] | None = None
     # Whether manual team/role corrections can be applied (trajectories saved).
@@ -198,3 +205,7 @@ class PlayerUpdateIn(BaseModel):
 
 class CornerSuggestionOut(BaseModel):
     corners: list[PixelCorner]
+
+
+class ReplayVideoIn(BaseModel):
+    speed: Literal[1, 2, 4] = 1

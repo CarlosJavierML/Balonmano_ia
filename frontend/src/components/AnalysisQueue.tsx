@@ -82,7 +82,13 @@ export default function AnalysisQueue({ onChange }: { onChange?: () => void }) {
                   {running
                     ? j.cancel_requested
                       ? "Cancelando…"
-                      : `${j.kind === "tracking" ? "Procesando directo" : "Analizando vídeo"} · ${pct}%`
+                      : `${
+                          j.kind === "tracking"
+                            ? "Procesando directo"
+                            : j.kind === "replay_video"
+                              ? "Generando vídeo de la recreación"
+                              : "Analizando vídeo"
+                        } · ${pct}%`
                     : j.position === 1
                       ? "Siguiente en la cola"
                       : "En espera"}

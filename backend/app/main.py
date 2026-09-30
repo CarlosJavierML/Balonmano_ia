@@ -8,9 +8,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.api.routes import calibration, jobs, matches, reports, stream, upload
+from app.api.routes import calibration, jobs, matches, replay, reports, stream, upload
 from app.config import settings
 from app.db import init_db
 from app.worker.runner import Worker
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
+# Recreation data (every trajectory of a session) is large but very
+# compressible JSON.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -48,6 +52,7 @@ app.include_router(stream.router)
 app.include_router(reports.router)
 app.include_router(calibration.router)
 app.include_router(jobs.router)
+app.include_router(replay.router)
 
 
 @app.get("/health")

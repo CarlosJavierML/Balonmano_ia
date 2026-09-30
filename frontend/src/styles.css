@@ -707,3 +707,93 @@ th {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+.replay-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.replay-canvas-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.replay-canvas-wrap canvas {
+  display: block;
+  border-radius: var(--radius);
+}
+
+.replay-banner {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  background: rgba(10, 14, 25, 0.9);
+  border: 2px solid;
+  border-radius: 10px;
+  padding: 6px 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: 94%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.replay-timeline {
+  position: relative;
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.replay-timeline input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.replay-marker {
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 12px;
+  margin-left: -4px;
+  border: none;
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.replay-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.replay-clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.replay-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.replay-option select {
+  width: auto;
+  padding: 4px 8px;
+}
+
+.replay-video {
+  width: 100%;
+  border-radius: var(--radius);
+  background: #000;
+  margin-top: 10px;
+}
