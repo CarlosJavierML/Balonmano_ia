@@ -58,9 +58,11 @@ equipos, etc.).
 
 ## Probarlo en la nube
 
-Ver [`docs/DEPLOY.md`](docs/DEPLOY.md): despliegue gratuito en Hugging Face
-Spaces (un solo contenedor con dashboard, API y análisis, protegido con
-contraseña) que se actualiza solo en cada push.
+Ver [`docs/DEPLOY.md`](docs/DEPLOY.md). La forma más rápida y gratuita es el
+cuaderno de **Google Colab** (`deploy/colab/Balonmano_IA.ipynb`): arranca la
+app con GPU gratis y te da un enlace público protegido con contraseña.
+También se puede ejecutar en tu ordenador con un enlace público, o en
+Hugging Face Spaces (de pago).
 
 ## Puesta en marcha rápida (Docker)
 
